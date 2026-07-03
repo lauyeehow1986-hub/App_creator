@@ -184,7 +184,6 @@ tauri-build = { version = "2" }
 [dependencies]
 tauri = { version = "2" }
 tauri-plugin-localhost = "2"
-portpicker = "0.1"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 ', crate_name), fs::path(src_tauri, "Cargo.toml"))
@@ -196,6 +195,7 @@ serde = { version = "1.0", features = ["derive"] }
 
   writeLines(sprintf('#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::net::TcpListener;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 fn main() {
@@ -203,15 +203,30 @@ fn main() {
     // service worker + webR to start; Tauri\'s default asset protocol serves
     // the frontend from http://tauri.localhost, which shinylive rejects
     // ("requires either a connection to localhost, or a connection via https").
-    // tauri-plugin-localhost serves the embedded frontend over
-    // http://localhost:<port> instead, which satisfies that check. Verified by
-    // launching the built .exe on Windows - the asset-protocol origin left the
-    // shinylive app permanently on its service-worker warning screen.
-    let port = portpicker::pick_unused_port().expect("no free port available");
+    // tauri-plugin-localhost serves the embedded frontend over a real loopback
+    // origin instead, which satisfies that check. Verified by launching the
+    // built .exe on Windows - the asset-protocol origin left the shinylive app
+    // permanently on its service-worker warning screen.
+    //
+    // Bind explicitly to 127.0.0.1 (not the plugin default "localhost"): a
+    // loopback-IPv4 listener does not trip Windows Firewall\'s "allow network
+    // access" prompt, whereas the default did. shinylive accepts 127.0.0.1 as a
+    // localhost name, so the webview navigates there directly.
+    let host = "127.0.0.1";
+    // Reserve a free port by binding to loopback only, then drop the listener
+    // and hand the port to the plugin. Do NOT use the portpicker crate here: it
+    // probes ports by binding to 0.0.0.0/[::] (UNSPECIFIED), and that momentary
+    // wildcard bind is itself what triggers the Windows Firewall prompt we are
+    // trying to avoid - even though the real server only ever binds loopback.
+    let port = TcpListener::bind((host, 0))
+        .expect("failed to reserve a loopback port")
+        .local_addr()
+        .expect("failed to read reserved port")
+        .port();
     tauri::Builder::default()
-        .plugin(tauri_plugin_localhost::Builder::new(port).build())
+        .plugin(tauri_plugin_localhost::Builder::new(port).host(host).build())
         .setup(move |app| {
-            let url = format!("http://localhost:{}/index.html", port);
+            let url = format!("http://{}:{}/index.html", host, port);
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse().unwrap()))
                 .title("%s")
                 .inner_size(1000.0, 800.0)

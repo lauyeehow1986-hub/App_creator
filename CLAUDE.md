@@ -150,12 +150,13 @@ explains *why* some things are shaped the way they are.
   template bugs (absolute-path `frontendDist` handling, non-default
   `identifier`, unconditional `icons/icon.png`, plus the `platform`
   `arg_match(multiple = TRUE)` default-subset bug) still stand.
-  One wart worth knowing: `tauri-plugin-localhost` opens a local HTTP
-  listener, so Windows Firewall shows a one-time "allow network access"
-  prompt on first launch. The app renders and works regardless of the
-  choice (the webview reaches it over loopback, which bypasses the
-  firewall), but for a locked-down target that prompt is friction; a
-  future refinement is to bind the listener to `127.0.0.1` explicitly.
+  The local HTTP listener is bound to `127.0.0.1` (loopback only) so it
+  raises **no Windows Firewall prompt** (verified: `netstat` shows a lone
+  `127.0.0.1:<port>` listener, clean launch shows no dialog). Two things
+  were needed: `.host("127.0.0.1")` on the plugin, and reserving the port
+  with a `std::net::TcpListener` on `127.0.0.1:0` instead of the
+  `portpicker` crate — `portpicker` probes ports by binding `0.0.0.0`,
+  and that wildcard bind alone triggers the prompt.
 - **`enable_update_check()`**: the R-side file injection is unit
   tested; the generated JS was checked for syntax validity with `node
   --check` but never actually run in a browser against a real `fetch`.

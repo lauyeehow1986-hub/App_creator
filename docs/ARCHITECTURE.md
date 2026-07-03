@@ -189,13 +189,19 @@ was re-verified after each fix.
      (picked via `portpicker`), and omits the config `windows` array to
      avoid a duplicate `"main"` label.
 - `backend = "wasm"` (implemented): no sidecar R process; the embedded
-  frontend is served to the webview over `http://localhost:<port>` by
-  `tauri-plugin-localhost`. Caveat: that local HTTP listener triggers a
-  one-time Windows Firewall prompt on first launch. The app renders and
-  works whatever the user picks (the webview reaches the port over
-  loopback, which the firewall doesn't filter), but for a locked-down
-  target the prompt is friction — a future refinement is to bind the
-  listener to `127.0.0.1` explicitly so it never fires.
+  frontend is served to the webview over `http://127.0.0.1:<port>` by
+  `tauri-plugin-localhost`, and the webview navigates to that same
+  `127.0.0.1` origin (which shinylive accepts as a localhost name).
+  **No Windows Firewall prompt** — verified. Two things had to be right
+  for that: (a) the plugin is given `.host("127.0.0.1")` (its default,
+  `"localhost"`, prompted); and, less obviously, (b) the port is
+  reserved by binding a `std::net::TcpListener` to `127.0.0.1:0`
+  directly, *not* via the `portpicker` crate — `portpicker` probes for a
+  free port by binding to `0.0.0.0`/`[::]` (`UNSPECIFIED`), and that
+  momentary wildcard bind is itself enough to trigger the firewall
+  prompt even though the real server only ever listens on loopback.
+  With both in place, `netstat` shows a single `127.0.0.1:<port>`
+  listener and launching the `.exe` shows no prompt.
 - `backend = "portable"` (not implemented): the portable-R runtime would
   run as a Tauri *sidecar* process; the webview would point at the
   sidecar's local port. Not attempted yet — wiring a Windows-only
