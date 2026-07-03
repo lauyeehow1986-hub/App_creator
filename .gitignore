@@ -1,0 +1,16 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rcheck/
+inst/doc
+.DS_Store
+
+# build output (generated bundles are large and reproducible - never commit them)
+/build/
+/dist/
+*_cache/
+webr-repo-cache/
+r-portable-cache/
+src-tauri/target/
+node_modules/
