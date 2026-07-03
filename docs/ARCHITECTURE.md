@@ -9,26 +9,27 @@ future changes don't quietly re-litigate settled tradeoffs.
 
 | | `build_wasm()` | `build_portable()` | `build_tauri()` |
 |---|---|---|---|
-| **Status** | Implemented | Planned | Planned |
-| **What runs on target** | Browser only (WASM) | Real portable R + `httpuv` | Native shell (Tauri) wrapping either of the other two |
+| **Status** | Implemented (code unverified - see `CLAUDE.md` Verification notes) | Implemented for Windows, verified end-to-end; macOS/Linux not implemented | Implemented for `backend = "wasm"` desktop, verified end-to-end (real compile); `backend = "portable"` and mobile not implemented |
+| **What runs on target** | Browser only (WASM) | Real portable R, launched via `shiny::runApp()` | Native shell (Tauri) wrapping either of the other two |
 | **R install needed on target** | None | None (bundled) | None (bundled) |
 | **Admin rights needed** | None | None | None (portable exe; WebView2 caveat below) |
 | **CRAN package compatibility** | Only packages with precompiled WASM binaries (no arbitrary C/C++/Fortran source packages) | Full — anything installable on a normal R | Same as whichever backend it wraps |
 | **Real filesystem / DB access** | No (browser sandbox only; virtual FS) | Yes | Yes, if backend is `"portable"` |
-| **Typical size** | Tens of MB (webR runtime + package wasm binaries) | 100-300+ MB (R runtime + library) | Shell adds only ~1-10MB on top of its backend |
-| **Cross-platform reach** | Anywhere with a modern browser: Windows/macOS/Linux/Android/iOS | Windows easiest (R-Portable); macOS/Linux need a statically-built R | Windows/macOS/Linux desktop + Android/iOS via Tauri 2 mobile |
+| **Typical size** | Tens of MB (webR runtime + package wasm binaries) | ~167MB verified for the demo app (R-Portable 4.2.0 + 1 package); scales with dependencies | Shell adds ~9MB verified on top of its backend |
+| **Cross-platform reach** | Anywhere with a modern browser: Windows/macOS/Linux/Android/iOS | Windows only so far (R-Portable); macOS/Linux need a statically-built R | Windows/macOS/Linux desktop implemented; Android/iOS via Tauri 2 mobile not implemented |
 | **Cold start** | Slower (WASM interpreter warmup) | Fast (native R) | Fast |
 
-**Why WASM/shinylive is the default and the only implemented target so far:**
-given the "maximum capability, minimum size" framing, minimum size is the
-one that's non-negotiable across every target platform (including
-Android/iOS, where you *can't* bundle a portable R runtime at all) — so
-it has to work everywhere, and it's also the cheapest to build and verify
-without needing per-OS portable R binaries or a Rust/Tauri toolchain.
-`build_portable()` and `build_tauri()` are real, designed, and scaffolded
-(see their roxygen docs in `R/target-portable.R` / `R/target-tauri.R`) but
-intentionally not implemented until there's a concrete app that needs what
-WASM can't do (native DB drivers, compiled-only packages, real disk I/O).
+**Why WASM/shinylive is the default target:** given the "maximum
+capability, minimum size" framing, minimum size is the one that's
+non-negotiable across every target platform (including Android/iOS,
+where you *can't* bundle a portable R runtime at all) — so it has to
+work everywhere. `build_portable()` (Windows) and `build_tauri()`
+(`backend = "wasm"`, desktop) are now also implemented and verified;
+`build_portable()` for macOS/Linux, `build_tauri(backend = "portable")`,
+and mobile platforms remain deliberately unimplemented until there's a
+concrete app that needs what WASM can't do (native DB drivers,
+compiled-only packages, real disk I/O) to design the harder cases
+against.
 
 ## Key constraints this design is built around
 
@@ -55,9 +56,10 @@ WASM can't do (native DB drivers, compiled-only packages, real disk I/O).
    Every target writes a `manifest.json` (via `write_build_manifest()`)
    into its bundle root with the package version, git SHA of the app
    source, and build timestamp, so two copies on two machines can be
-   told apart without diffing files. A "phone home if reachable" update
-   banner is a plausible future addition (tracked below) but out of
-   scope until there's a concrete intranet endpoint to check against.
+   told apart without diffing files. `enable_update_check()` adds an
+   opt-in, fail-silent "phone home if reachable" banner on top of a
+   `build_wasm()` bundle for teams that do have some intranet endpoint
+   to check against — see its roxygen docs in `R/update-check.R`.
 
 ## Why no bundled static-server binary
 
@@ -71,30 +73,41 @@ lazy/minimal coding convention (see `CLAUDE.md`). Revisit this if real
 deployments show target machines with neither Python nor a browser that
 tolerates `file://` WASM+service-worker loading.
 
-## Native shell notes (for when `build_tauri()` gets implemented)
+## Native shell notes (verified for `backend = "wasm"` desktop; the rest is still planned)
 
 - Tauri uses the OS's built-in webview (WebView2 on Windows, WKWebView on
   macOS/iOS, WebKitGTK on Linux, system webview on Android) instead of
-  bundling a browser engine — this is what keeps the shell itself small
-  (single-digit MB) regardless of what it wraps.
-- **WebView2 caveat:** present by default on Windows 10 21H2+ and Windows
-  11. Older/locked-down images may lack it; the "Fixed Version" WebView2
-  distributable can be xcopied alongside the app without an install step
-  (no admin rights needed), but adds ~150MB. The evergreen bootstrapper
-  is *not* an option here since it typically needs admin rights.
-- `backend = "wasm"`: no sidecar process; Tauri serves the shinylive
-  bundle via its asset protocol directly, which also sidesteps the
-  `file://` CORS/MIME issues the plain-browser launch path works around.
-- `backend = "portable"`: the portable-R runtime runs as a Tauri
-  *sidecar* process; the webview points at the sidecar's local `httpuv`
-  port.
-- Android/iOS builds go through `tauri android` / `tauri ios`, producing
-  a sideloadable `.apk`/`.ipa` — no app-store or admin dependency.
+  bundling a browser engine — this is what keeps the shell itself small.
+  **Verified**: a project generated by `write_tauri_project()` and built
+  with `cargo tauri build --no-bundle` produced a 9.1MB dynamically-linked
+  Linux binary (confirmed via `ldd` that it links the system
+  `libwebkit2gtk-4.1.so`, not a bundled copy).
+- `write_tauri_project()` currently generates `bundle.active = false`
+  (`--no-bundle` output: a bare native executable, no `.deb`/`.msi`/`.dmg`
+  installer). This is deliberate, not a shortcut taken under time
+  pressure: an installer is the opposite of "just copy the folder and
+  run it." Full per-OS installer packaging remains a possible future
+  addition if a real use case wants it.
+- **WebView2 caveat (Windows, not yet verified — no Windows machine in
+  the sandbox that built this):** present by default on Windows 10
+  21H2+ and Windows 11. Older/locked-down images may lack it; the
+  "Fixed Version" WebView2 distributable can be xcopied alongside the
+  app without an install step (no admin rights needed), but adds
+  ~150MB. The evergreen bootstrapper is *not* an option here since it
+  typically needs admin rights.
+- `backend = "wasm"` (implemented): no sidecar process; Tauri serves the
+  frontend bundle via its asset protocol directly.
+- `backend = "portable"` (not implemented): the portable-R runtime would
+  run as a Tauri *sidecar* process; the webview would point at the
+  sidecar's local port. Not attempted yet — wiring a Windows-only
+  sidecar binary into a Tauri project that was only build/run-tested on
+  Linux in this sandbox would be unverified in exactly the way this
+  project tries to avoid.
+- Android/iOS builds (not implemented) would go through `tauri android` /
+  `tauri ios`, producing a sideloadable `.apk`/`.ipa`.
 
 ## Explicitly deferred / not designed yet
 
-- Opportunistic online update-check banner (`enable_update_check()` or
-  similar) — needs a real intranet version endpoint to design against.
 - Fully offline *build* pipeline (pre-mirroring webR/R-Portable/Tauri
   toolchain dependencies for build machines with no internet) — current
   design assumes the build machine has internet; revisit if that
@@ -102,3 +115,9 @@ tolerates `file://` WASM+service-worker loading.
 - `build_portable()` for macOS/Linux specifically (Windows via
   R-Portable is the well-trodden path; macOS/Linux need a statically
   linked R build, e.g. via `rig` or conda-forge R, not yet evaluated).
+- `build_tauri(backend = "portable")` (Tauri + portable-R sidecar) and
+  `build_tauri(platform = c("android", "ios"))`.
+- Full per-OS Tauri installer bundling (`.msi`/`.dmg`/`.deb`/`.AppImage`)
+  — `write_tauri_project()` deliberately ships `bundle.active = false`
+  today; see "Native shell notes" above for why that's the right default,
+  not just what got skipped.

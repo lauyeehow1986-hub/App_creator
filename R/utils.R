@@ -1,3 +1,7 @@
+#' @keywords internal
+#' @noRd
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
 #' Validate that a directory looks like a runnable Shiny app
 #' @param app_dir Path to check.
 #' @keywords internal

@@ -23,12 +23,13 @@ reason and a note in that file.
 
 | Piece | Status |
 |---|---|
-| `build_wasm()` | Implemented (shinylive/webR bundle) |
-| `build_portable()` | Scaffolded, `cli_abort()`s with "not yet implemented" |
-| `build_tauri()` | Scaffolded, `cli_abort()`s with "not yet implemented" |
+| `build_wasm()` | Implemented. **Code unverified** - see Verification notes below. |
+| `build_portable()` (Windows) | Implemented and verified end-to-end against the real internet (downloads/caches a real R-Portable, produces a real launcher). macOS/Linux `cli_abort()` as not implemented. |
+| `build_tauri()` (`backend = "wasm"`, desktop) | Implemented and verified end-to-end: really compiles a working native binary via a real Tauri build. `backend = "portable"` and mobile platforms `cli_abort()` as not implemented. |
+| `enable_update_check()` | Implemented and tested (injection logic + generated JS syntax-checked with `node --check`); the JS itself has not been exercised in a real browser. |
 | `build()` dispatcher | Implemented, routes to the above |
-| Tests | Skeleton exists (`tests/testthat/test-build.R`), covers validation logic only |
-| CI | `.github/workflows/R-CMD-check.yaml` present, unverified (no R in the sandbox this was authored in — see below) |
+| Tests | `tests/testthat/test-build.R` - fast unit tests run every time; a few slow/network/toolchain tests are gated behind `SHINYALCATRAZ_RUN_NETWORK_TESTS=1` (see below) |
+| CI | `.github/workflows/R-CMD-check.yaml` present, itself unverified (GitHub Actions runners weren't exercised from this sandbox) |
 | Demo app | `inst/examples/demo-app/` — plain `shiny`-only app, no extra deps, used to exercise the pipeline |
 
 ## Codebase structure
@@ -37,59 +38,104 @@ reason and a note in that file.
 DESCRIPTION, NAMESPACE, LICENSE, LICENSE.md   Standard R package metadata (MIT license)
 R/
   build.R                  build() dispatcher + target validation
-  target-wasm.R            build_wasm() - implemented
-  target-portable.R        build_portable() - planned, not implemented
-  target-tauri.R           build_tauri() - planned, not implemented
-  utils.R                  check_app_dir(), write_build_manifest(), git_sha(), dir_size()
+  target-wasm.R            build_wasm() - implemented, unverified (see below)
+  target-portable.R        build_portable() - Windows implemented & verified
+  target-tauri.R           build_tauri() - wasm-backend desktop implemented & verified
+  update-check.R           enable_update_check() - implemented & tested
+  utils.R                  check_app_dir(), write_build_manifest(), git_sha(), dir_size(), %||%
   shinyalcatraz-package.R  package-level roxygen doc (_PACKAGE)
 inst/examples/demo-app/    Minimal demo Shiny app (shiny only, no extra deps)
-tests/testthat/            Test skeleton
+tests/testthat/            Fast tests + a few network/toolchain-gated integration tests
+man/                       roxygen2-generated - regenerate with roxygen2::roxygenise(".") after any @param/@export change, don't hand-edit
 docs/ARCHITECTURE.md       Design decisions and tradeoff matrix - READ THIS FIRST
 .github/workflows/         R-CMD-check CI
 ```
 
-There is no `man/` content yet (no roxygen2 available in the sandbox that
-authored this scaffold — see below); `NAMESPACE` was hand-written to
-match the current `@export` tags in `R/`. Regenerate both properly with
-`devtools::document()` once you have a working R install.
-
 ## Development workflow
 
-**This repo's own build/test loop needs R, which is not guaranteed to be
-present in every environment an AI assistant runs in** (it was not
-present in the sandbox this scaffold was authored in — everything below
-was hand-written and has not been executed against a real R
-interpreter). If R is available:
+R **is not guaranteed to be present** in every environment an AI
+assistant runs in. If it's missing, Ubuntu's `apt` has precompiled
+binaries for every dependency this package needs (`r-base-core` plus
+`r-cran-{cli,fs,jsonlite,rlang,testthat,roxygen2,pkgload,desc}`) — this
+worked when CRAN itself was network-policy-blocked in the sandbox that
+built this package, so prefer it over `install.packages()` if CRAN is
+unreachable. `p7zip-full` is also needed on the build machine for
+`build_portable()` (unpacks the R-Portable archive), and a Rust
+toolchain + `libwebkit2gtk-4.1-dev`/`libgtk-3-dev`/etc. (or `npx
+@tauri-apps/cli`, which ships a prebuilt binary and needs no local Rust
+install) for `build_tauri()`.
 
 ```r
 devtools::load_all()   # iterate
 devtools::document()   # regenerate NAMESPACE/man/ after changing roxygen comments or exports
-devtools::test()       # run tests/testthat
+devtools::test()       # run tests/testthat (fast subset by default)
 devtools::check()      # full R CMD check before anything you'd call "done"
 ```
 
-If R is *not* available in your environment, say so explicitly rather
-than claiming a change works — this mirrors the project's own top-level
-instruction to never claim success on unverified code. Read the code
-carefully for syntax correctness instead, and flag anything that would
-need a real R session to confirm (in particular: `shinylive::export()`
-argument names/behavior, and anything touching `httpuv`/portable-R/Tauri
-once those targets are implemented).
+If R is genuinely unavailable and can't be installed, say so explicitly
+rather than claiming a change works — this mirrors the project's own
+top-level instruction to never claim success on unverified code.
 
-### Testing a build end-to-end (when R is available)
+### Testing a build end-to-end
 
 ```r
 library(shinyalcatraz)
 demo_app <- system.file("examples", "demo-app", package = "shinyalcatraz")
-build_wasm(demo_app, out_dir = "dist/wasm")
-# then open dist/wasm/index.html or run dist/wasm/run.sh / run.bat
+build_wasm(demo_app, out_dir = "dist/wasm")       # unverified in this sandbox - see below
+build_portable(demo_app, out_dir = "dist/portable", platform = "windows")  # verified
+build_tauri(demo_app, out_dir = "dist/tauri")     # verified (backend = "wasm", desktop)
 ```
 
-`build_wasm()` requires the `shinylive` R package and internet access on
-*first* run (to download/cache the webR runtime + package binaries).
-Later runs reuse that cache — this matches the project's core assumption
-that the *build* machine has internet even though the *deployment*
-target never does.
+Slow/network/toolchain-dependent integration tests (real downloads, real
+compiles) are skipped by default and gated behind an env var:
+
+```r
+Sys.setenv(SHINYALCATRAZ_RUN_NETWORK_TESTS = "1")
+devtools::test()
+```
+
+### Verification notes (read this before trusting "implemented")
+
+This package was built in a sandbox with a restrictive egress policy.
+What actually got exercised, and what didn't:
+
+- **`build_portable()`**: fully verified. Downloaded a real R-Portable
+  4.2.0 from sourceforge (79MB, extracted with `7z`), copied it into a
+  bundle, generated `run.bat`, wrote `manifest.json`. The one thing
+  *not* verified is actually running the resulting Windows `.exe` /
+  installing packages via it, since that requires Windows (`Rscript.exe`
+  correctly fails with "cannot execute binary file" on Linux — handled
+  as a warning, not a crash, so the rest of the pipeline still
+  completes).
+- **`build_tauri()`**: fully verified, including compiling and running
+  the actual `cargo tauri build` toolchain. Two real bugs were caught
+  and fixed this way that a code-only review would have missed: (1) a
+  relative `frontendDist` path resolves against the wrong base
+  directory unless written as absolute, and (2) `tauri::generate_context!()`
+  panics at compile time if `identifier` is left at the `com.tauri.dev`
+  default, *and* separately still looks for `icons/icon.png`
+  unconditionally even with `bundle.active = false`. All three are now
+  baked into `write_tauri_project()`. A separate real bug was also
+  caught in the `platform` argument: `rlang::arg_match(multiple = TRUE)`
+  treats an unspecified argument equal to the full `values` set as "the
+  user selected everything," so a multi-select arg's *default* must be
+  a real subset, never the full validation set — the fix is documented
+  inline in `target-tauri.R`.
+- **`build_wasm()`**: implementation follows `shinylive::export()`'s
+  documented API, but could **not** be exercised — `cloud.r-project.org`,
+  `*.r-universe.dev`, `cdn.jsdelivr.net`, and `shinylive.io` were all
+  network-policy-blocked (403) in that sandbox, which blocks both
+  installing the `shinylive` R package and downloading the webR/package
+  assets it needs at export time. (For contrast: sourceforge, crates.io,
+  and the npm registry were all reachable, which is what let
+  `build_portable()`/`build_tauri()` get verified for real.) Don't
+  assume this reflects a real user's dev machine — it's very likely a
+  sandbox-specific policy, not a real-world constraint — but do treat
+  `build_wasm()`'s code as reviewed-not-run until someone runs it
+  somewhere `shinylive` is actually installable.
+- **`enable_update_check()`**: the R-side file injection is unit
+  tested; the generated JS was checked for syntax validity with `node
+  --check` but never actually run in a browser against a real `fetch`.
 
 ## Conventions
 
@@ -134,11 +180,15 @@ and the `switch()` in `build()`, add a row to the tradeoff table in
   *philosophy* (see Conventions above) was deliberately borrowed into
   this project's own `CLAUDE.md` — nothing in that repo itself should be
   modified as part of work on `shinyalcatraz`.
-- Don't implement `build_portable()` or `build_tauri()` speculatively
-  without re-reading `docs/ARCHITECTURE.md`'s "Native shell notes" and
-  "Explicitly deferred" sections first — there are real platform caveats
-  (WebView2 bundling, R-Portable library isolation) that are easy to get
-  wrong silently.
+- Don't extend `build_portable()` to macOS/Linux, or `build_tauri()` to
+  `backend = "portable"`/mobile, without re-reading `docs/ARCHITECTURE.md`'s
+  "Native shell notes" and "Explicitly deferred" sections first — there
+  are real platform caveats (WebView2 bundling, R-Portable library
+  isolation) that are easy to get wrong silently.
+- Don't trust a Tauri config template (yours or anyone else's) that
+  hasn't actually been run through `cargo tauri build` — see
+  "Verification notes" above for three real, non-obvious bugs a
+  read-only review would have missed.
 - Don't add a bundled static-server binary to `build_wasm()`'s launcher
   path — see "Why no bundled static-server binary" in
   `docs/ARCHITECTURE.md` for why that's a deliberate size/complexity

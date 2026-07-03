@@ -5,9 +5,12 @@ on a locked-down machine: copy the folder over, double-click (or open in a
 browser), no R install, no internet, no administrator rights required on
 the target.
 
-> Status: early scaffold. `build_wasm()` is implemented; `build_portable()`
-> and `build_tauri()` are designed but not yet implemented — see
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+> Status: `build_wasm()`, `build_portable()` (Windows), and `build_tauri()`
+> (desktop, wasm backend) are all implemented; the latter two have been
+> verified end-to-end against the real internet (real download, real
+> compile). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for exactly
+> what's verified vs. still planned (macOS/Linux portable, Tauri +
+> portable-R sidecar, mobile).
 
 ## Install
 
@@ -38,8 +41,13 @@ machine either open `index.html` directly, or run the generated
 | Target | Function | What it needs on the target machine |
 |---|---|---|
 | WebAssembly (browser-only) | `build_wasm()` | A modern browser. Nothing else. |
-| Portable R backend *(planned)* | `build_portable()` | Nothing — bundles a real portable R runtime. |
-| Native shell *(planned)* | `build_tauri()` | Nothing — wraps either target above in a native double-click app. |
+| Portable R backend (Windows) | `build_portable()` | Nothing — bundles a real portable R runtime. |
+| Native shell (desktop) | `build_tauri()` | Nothing — wraps a `build_wasm()` bundle in a native double-click app. |
+
+```r
+build_portable(demo_app, out_dir = "dist/portable", platform = "windows")
+build_tauri(demo_app, out_dir = "dist/tauri")  # compiles a real native binary if Rust/Tauri is on the build machine
+```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full tradeoff
 matrix (size, package compatibility, filesystem/DB access, platform
@@ -53,7 +61,11 @@ This package targets standard R package tooling:
 devtools::load_all()
 devtools::document()
 devtools::test()
+devtools::check()
 ```
+
+A few slow tests that do real downloads/compiles are gated behind
+`Sys.setenv(SHINYALCATRAZ_RUN_NETWORK_TESTS = "1")`.
 
 See [`CLAUDE.md`](CLAUDE.md) for codebase structure, conventions, and
 the full architecture/decision history for AI assistants (and humans)
