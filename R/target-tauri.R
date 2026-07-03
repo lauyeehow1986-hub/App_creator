@@ -183,6 +183,8 @@ tauri-build = { version = "2" }
 
 [dependencies]
 tauri = { version = "2" }
+tauri-plugin-localhost = "2"
+portpicker = "0.1"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 ', crate_name), fs::path(src_tauri, "Cargo.toml"))
@@ -192,22 +194,57 @@ serde = { version = "1.0", features = ["derive"] }
 }
 ', fs::path(src_tauri, "build.rs"))
 
-  writeLines('#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+  writeLines(sprintf('#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 fn main() {
+    // shinylive requires a real http://localhost (or https) origin for its
+    // service worker + webR to start; Tauri\'s default asset protocol serves
+    // the frontend from http://tauri.localhost, which shinylive rejects
+    // ("requires either a connection to localhost, or a connection via https").
+    // tauri-plugin-localhost serves the embedded frontend over
+    // http://localhost:<port> instead, which satisfies that check. Verified by
+    // launching the built .exe on Windows - the asset-protocol origin left the
+    // shinylive app permanently on its service-worker warning screen.
+    let port = portpicker::pick_unused_port().expect("no free port available");
     tauri::Builder::default()
+        .plugin(tauri_plugin_localhost::Builder::new(port).build())
+        .setup(move |app| {
+            let url = format!("http://localhost:{}/index.html", port);
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse().unwrap()))
+                .title("%s")
+                .inner_size(1000.0, 800.0)
+                .build()?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-', fs::path(src_tauri, "src", "main.rs"))
+', app_name), fs::path(src_tauri, "src", "main.rs"))
+
+  # Copy the frontend bundle into the project and reference it with a path
+  # RELATIVE to tauri.conf.json ("../frontend"). Tauri only embeds frontendDist
+  # (via generate_context!()) and serves index.html over its app protocol when
+  # the path resolves relative to the config; an ABSOLUTE path is instead loaded
+  # as a runtime `file://<dir>/` URL, so the webview shows a directory listing,
+  # never the app. This only shows up when you actually launch the built .exe -
+  # the Linux `cargo tauri build` compile-check that first "verified" this
+  # template never ran the window. Copying the bundle in also makes the project
+  # self-contained (no dependency on an external absolute path at build time).
+  frontend_local <- fs::path(project_dir, "frontend")
+  if (fs::dir_exists(frontend_local)) fs::dir_delete(frontend_local)
+  fs::dir_copy(frontend_dist, frontend_local)
 
   conf <- list(
     productName = app_name,
     version = "0.1.0",
     identifier = identifier,
-    build = list(frontendDist = as.character(frontend_dist)),
+    build = list(frontendDist = "../frontend"),
+    # No `windows` here on purpose: the window is created in main.rs's setup()
+    # hook so it can point at the tauri-plugin-localhost URL. Declaring a window
+    # here too would collide on the "main" label.
     app = list(
-      windows = list(list(title = app_name, width = 1000, height = 800)),
       security = list(csp = NULL)
     ),
     bundle = list(active = FALSE, icon = list())
@@ -229,6 +266,40 @@ fn main() {
     "v+UfAzMxv7S9pQgICAgICAgICAgICAgICKwDD5XdZEzlqKFkAAAAAElFTkSuQmCC"
   )
   writeBin(jsonlite::base64_dec(icon_b64), fs::path(src_tauri, "icons", "icon.png"))
+
+  # icon.ico is *also* required, but only on Windows: `tauri-build`'s build
+  # script embeds a Windows Resource (via tauri-winres/embed-resource) and
+  # aborts with "`icons/icon.ico` not found" if it's missing. This never
+  # surfaced on the Linux compile that first verified this template (no .rc
+  # step there), only on a real Windows `cargo tauri build`. Minimal valid
+  # 16x16 32-bit BMP-backed .ico, solid dark grey/opaque.
+  ico_b64 <- paste0(
+    "AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAAAAAAAAA",
+    "AAAAAAAAAAAAAAAAAtLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8t",
+    "LS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS",
+    "3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/",
+    "LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS",
+    "0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t",
+    "/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y",
+    "0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0t",
+    "Lf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf",
+    "8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8t",
+    "LS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS",
+    "3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/",
+    "LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS",
+    "0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t",
+    "/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y",
+    "0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0t",
+    "Lf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf",
+    "8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8t",
+    "LS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS",
+    "3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/",
+    "LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS",
+    "0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/LS0t/y0tLf8tLS3/AAAA",
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "AAAAAAAAAAAAAAAA=="
+  )
+  writeBin(jsonlite::base64_dec(ico_b64), fs::path(src_tauri, "icons", "icon.ico"))
 
   invisible(project_dir)
 }

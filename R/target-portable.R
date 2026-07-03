@@ -186,7 +186,7 @@ fetch_r_portable <- function(cache_dir, version = NULL) {
   # curl isn't on the build machine, though 7z is required regardless).
   curl_bin <- Sys.which("curl")
   if (nzchar(curl_bin)) {
-    status <- system2(curl_bin, c("-sSL", "--max-time", "300", "-o", shQuote(archive), shQuote(resolved)))
+    status <- system2(curl_bin, c(curl_windows_ssl_args(), "-sSL", "--max-time", "300", "-o", shQuote(archive), shQuote(resolved)))
     if (!identical(status, 0L) || !fs::file_exists(archive)) {
       cli::cli_abort("Download of R-Portable {ver} failed (curl exit status {status}).")
     }
@@ -227,13 +227,68 @@ resolve_final_url <- function(url) {
   if (!nzchar(curl_bin)) return(url)
   out <- suppressWarnings(system2(
     curl_bin,
-    c("-sS", "-o", "/dev/null", "-w", "%{url_effective}", "-L", "--max-time", "30", shQuote(url)),
+    c(curl_windows_ssl_args(), "-sS", "-o", "/dev/null", "-w", "%{url_effective}", "-L", "--max-time", "30", shQuote(url)),
     stdout = TRUE, stderr = FALSE
   ))
   if (length(out) > 0 && nzchar(out[1])) out[1] else url
 }
 
+#' Extra curl flags needed on Windows builds of curl (schannel backend)
+#'
+#' Verified on a real Windows machine: curl's schannel backend treats a
+#' failed certificate-revocation check (`CRYPT_E_NO_REVOCATION_CHECK`,
+#' curl exit 35) as fatal by default, which fires whenever the OCSP/CRL
+#' endpoint isn't reachable - plausible on exactly the locked-down
+#' corporate networks this package targets. `--ssl-no-revoke` is
+#' schannel-specific (errors on curl builds using OpenSSL/other
+#' backends), so only add it on Windows.
+#' @keywords internal
+#' @noRd
+curl_windows_ssl_args <- function() {
+  if (.Platform$OS.type == "windows") "--ssl-no-revoke" else character(0)
+}
+
 #' Install packages into a private library using the bundled R
+#'
+#' Two things verified on a real Windows machine, both silent-corruption
+#' bugs a code-only review would have missed:
+#'
+#' 1. Forces `download.file.method = "wininet"`: R-Portable's bundled
+#'    Rscript.exe defaults to the `libcurl` download method, whose
+#'    schannel SSL backend hangs indefinitely (not even a fast failure)
+#'    on this machine's network when it can't reach the
+#'    certificate-revocation endpoint - the same underlying issue as
+#'    `curl_windows_ssl_args()` above, but libcurl-via-R has no
+#'    equivalent of curl.exe's `--ssl-no-revoke` flag exposed, so
+#'    `wininet` (which doesn't do revocation checking the same way) is
+#'    the workaround here instead.
+#' 2. Clears `R_LIBS_USER`/`R_LIBS_SITE`/`R_LIBS` for the child process:
+#'    the *build machine's own R* sets `R_LIBS_USER` in its process
+#'    environment at startup (even when no such variable is configured
+#'    anywhere persistent), and `system2()` passes that down to the
+#'    bundled Rscript.exe by default. The bundled R then resolves
+#'    `.libPaths()` to include the build machine's per-user library
+#'    (a different R version/ABI) and can load an incompatible compiled
+#'    dependency from there instead of building its own - observed as
+#'    `shiny`'s install failing with `LoadLibrary failure: The specified
+#'    procedure could not be found` while loading a `digest.dll` built
+#'    for the *host's* R, not R-Portable's. Left unfixed, this is exactly
+#'    the failure mode roxygen's "installed binaries match the shipped
+#'    R version/ABI" claim promises can't happen.
+#'
+#' Without both fixes, a "successful"-looking bundle (no build error
+#' surfaced beyond a warning) can silently ship with an empty or
+#' broken package library.
+#'
+#' Also forces `type = "win.binary"`. R-Portable is pinned at an old,
+#' fixed R version (currently 4.2.0), and CRAN stops refreshing a given
+#' R-series' Windows *binary* repo well before it stops publishing new
+#' *source* releases - so `install.packages()`'s default of preferring
+#' whichever is newer will, for any actively-maintained package,
+#' eventually try to compile from source on a machine that isn't
+#' guaranteed to have Rtools. Forcing the binary means a missing binary
+#' fails loudly and immediately instead of silently attempting (and
+#' sometimes, as above, half-succeeding into) a source build.
 #' @keywords internal
 #' @noRd
 install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
@@ -242,11 +297,25 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   if (!fs::file_exists(rscript)) rscript <- fs::path(r_portable_dir, "bin", "Rscript.exe")
 
   install_expr <- sprintf(
-    'install.packages(c(%s), lib = %s, repos = "https://cloud.r-project.org")',
+    'options(download.file.method = "wininet"); install.packages(c(%s), lib = %s, repos = "https://cloud.r-project.org", type = "win.binary")',
     paste(sprintf('"%s"', pkgs), collapse = ", "),
     sprintf('"%s"', gsub("\\\\", "/", as.character(lib_dir)))
   )
   cli::cli_inform("Installing {length(pkgs)} package{?s} into the bundle's private library...")
+  # system2()'s own `env` argument is unreliable on Windows (verified: it
+  # makes even a trivial `system2("cmd", ..., env = "FOO=bar")` fail with
+  # status 5) - Sys.setenv()/Sys.unsetenv() around the call, relying on
+  # ordinary child-process environment inheritance, is the version that
+  # actually works.
+  isolate_vars <- c("R_LIBS_USER", "R_LIBS_SITE", "R_LIBS")
+  old_vals <- Sys.getenv(isolate_vars, unset = NA, names = TRUE)
+  Sys.setenv(R_LIBS_USER = "", R_LIBS_SITE = "", R_LIBS = "")
+  on.exit({
+    to_restore <- old_vals[!is.na(old_vals)]
+    if (length(to_restore) > 0) do.call(Sys.setenv, as.list(to_restore))
+    Sys.unsetenv(names(old_vals)[is.na(old_vals)])
+  }, add = TRUE)
+
   status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(install_expr)))
   if (!identical(status, 0L)) {
     cli::cli_warn("Package installation exited with status {status} - check the bundle's library before shipping it.")

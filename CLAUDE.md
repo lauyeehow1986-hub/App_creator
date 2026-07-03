@@ -23,9 +23,9 @@ reason and a note in that file.
 
 | Piece | Status |
 |---|---|
-| `build_wasm()` | Implemented. **Code unverified** - see Verification notes below. |
-| `build_portable()` (Windows) | Implemented and verified end-to-end against the real internet (downloads/caches a real R-Portable, produces a real launcher). macOS/Linux `cli_abort()` as not implemented. |
-| `build_tauri()` (`backend = "wasm"`, desktop) | Implemented and verified end-to-end: really compiles a working native binary via a real Tauri build. `backend = "portable"` and mobile platforms `cli_abort()` as not implemented. |
+| `build_wasm()` | Implemented and **verified end-to-end on a real Windows machine**: real `shinylive` export, bundle renders a working Shiny app in a real browser — served via the generated `serve.ps1`, since `file://` is blocked by CORS (that fallback was added as a fix this run). See Verification notes. |
+| `build_portable()` (Windows) | Implemented and **verified end-to-end on a real Windows machine**: downloads/caches a real R-Portable, installs the app's full transitive dependency tree into the bundle's private library, and the generated `run.bat` actually launches the Shiny app in a browser. Three real Windows-only bugs were found and fixed doing this. macOS/Linux `cli_abort()` as not implemented. |
+| `build_tauri()` (`backend = "wasm"`, desktop) | Implemented and **verified end-to-end on a real Windows machine**: real `cargo tauri build` produces a native `.exe` that launches, and its WebView2 window renders the shinylive Shiny app running webR (reactive UI + a rendered plot + data table). Three real Windows-only bugs were found and fixed doing this (missing `icons/icon.ico`; absolute `frontendDist` → directory listing; shinylive's service worker needs a `http://localhost` origin → `tauri-plugin-localhost`). Also compile-verified on Linux earlier. `backend = "portable"` and mobile platforms `cli_abort()` as not implemented. |
 | `enable_update_check()` | Implemented and tested (injection logic + generated JS syntax-checked with `node --check`); the JS itself has not been exercised in a real browser. |
 | `build()` dispatcher | Implemented, routes to the above |
 | Tests | `tests/testthat/test-build.R` - fast unit tests run every time; a few slow/network/toolchain tests are gated behind `SHINYALCATRAZ_RUN_NETWORK_TESTS=1` (see below) |
@@ -38,9 +38,9 @@ reason and a note in that file.
 DESCRIPTION, NAMESPACE, LICENSE, LICENSE.md   Standard R package metadata (MIT license)
 R/
   build.R                  build() dispatcher + target validation
-  target-wasm.R            build_wasm() - implemented, unverified (see below)
+  target-wasm.R            build_wasm() - implemented & verified on Windows (see below)
   target-portable.R        build_portable() - Windows implemented & verified
-  target-tauri.R           build_tauri() - wasm-backend desktop implemented & verified
+  target-tauri.R           build_tauri() - implemented & verified end-to-end on Windows (see below)
   update-check.R           enable_update_check() - implemented & tested
   utils.R                  check_app_dir(), write_build_manifest(), git_sha(), dir_size(), %||%
   shinyalcatraz-package.R  package-level roxygen doc (_PACKAGE)
@@ -96,43 +96,66 @@ devtools::test()
 
 ### Verification notes (read this before trusting "implemented")
 
-This package was built in a sandbox with a restrictive egress policy.
-What actually got exercised, and what didn't:
+This package was originally built in a sandbox with a restrictive
+egress policy, then given a **second verification pass on a real
+Windows 11 machine**. Both are recorded below — trust the Windows-pass
+result where the two differ, but keep the sandbox context because it
+explains *why* some things are shaped the way they are.
 
-- **`build_portable()`**: fully verified. Downloaded a real R-Portable
-  4.2.0 from sourceforge (79MB, extracted with `7z`), copied it into a
-  bundle, generated `run.bat`, wrote `manifest.json`. The one thing
-  *not* verified is actually running the resulting Windows `.exe` /
-  installing packages via it, since that requires Windows (`Rscript.exe`
-  correctly fails with "cannot execute binary file" on Linux — handled
-  as a warning, not a crash, so the rest of the pipeline still
-  completes).
-- **`build_tauri()`**: fully verified, including compiling and running
-  the actual `cargo tauri build` toolchain. Two real bugs were caught
-  and fixed this way that a code-only review would have missed: (1) a
-  relative `frontendDist` path resolves against the wrong base
-  directory unless written as absolute, and (2) `tauri::generate_context!()`
-  panics at compile time if `identifier` is left at the `com.tauri.dev`
-  default, *and* separately still looks for `icons/icon.png`
-  unconditionally even with `bundle.active = false`. All three are now
-  baked into `write_tauri_project()`. A separate real bug was also
-  caught in the `platform` argument: `rlang::arg_match(multiple = TRUE)`
-  treats an unspecified argument equal to the full `values` set as "the
-  user selected everything," so a multi-select arg's *default* must be
-  a real subset, never the full validation set — the fix is documented
-  inline in `target-tauri.R`.
-- **`build_wasm()`**: implementation follows `shinylive::export()`'s
-  documented API, but could **not** be exercised — `cloud.r-project.org`,
-  `*.r-universe.dev`, `cdn.jsdelivr.net`, and `shinylive.io` were all
-  network-policy-blocked (403) in that sandbox, which blocks both
-  installing the `shinylive` R package and downloading the webR/package
-  assets it needs at export time. (For contrast: sourceforge, crates.io,
-  and the npm registry were all reachable, which is what let
-  `build_portable()`/`build_tauri()` get verified for real.) Don't
-  assume this reflects a real user's dev machine — it's very likely a
-  sandbox-specific policy, not a real-world constraint — but do treat
-  `build_wasm()`'s code as reviewed-not-run until someone runs it
-  somewhere `shinylive` is actually installable.
+- **`build_wasm()`**: **verified end-to-end on Windows** (superseding
+  the sandbox, where `shinylive`'s CDN was blocked so it couldn't run
+  at all). Real `shinylive` export produced a bundle that renders a
+  working Shiny app in a real browser. One real bug surfaced only by
+  running it: opening `index.html` off `file://` is a permanently blank
+  page — the shinylive service worker is blocked by CORS under
+  `file://` — so a `serve.ps1` fallback (plain `System.Net.HttpListener`
+  on `localhost`, no admin/`netsh` needed) was added between the
+  `python3` and bare-`file://` launcher tiers. See the
+  "Why no bundled static-server binary" section of
+  `docs/ARCHITECTURE.md`. (Caveat: the export step still needs network
+  — `shinylive`/`pkgcache` phones `bioconductor.org` for a version
+  check — so a fully-offline *rebuild* isn't possible; the *output*
+  bundle is fully offline, which is the point.)
+- **`build_portable()`**: **verified end-to-end on Windows**, including
+  the two things the sandbox couldn't do (it's a Linux box): actually
+  running the bundled `Rscript.exe` to install packages, and launching
+  the finished `run.bat`. Doing this surfaced **three real, silent
+  Windows-only bugs**, all now fixed in `R/target-portable.R` and
+  documented in the "build_portable() Windows notes" section of
+  `docs/ARCHITECTURE.md`: (1) `curl`'s schannel backend hangs on
+  cert-revocation-check failures → `--ssl-no-revoke` (Windows-gated);
+  (2) the build machine's own `R_LIBS_USER` leaks into the bundled R
+  via `system2()` and loads an ABI-incompatible DLL → clear
+  `R_LIBS*` with `Sys.setenv()` (not `system2(env=)`, which is broken
+  on this R/Windows combo); (3) `install.packages()` silently prefers
+  a newer *source* release over the older *binary* for R-Portable's
+  pinned R → force `type = "win.binary"`.
+- **`build_tauri()`**: **verified end-to-end on Windows** — `cargo tauri
+  build` produced a native `.exe` (~8MB) that launches and whose WebView2
+  window renders the shinylive Shiny app running webR (reactive UI, a
+  live plot, and a data table computed by R-in-WASM). Getting there
+  surfaced **three real Windows-only bugs the earlier Linux compile-only
+  check could not** (compiling ≠ running the window), all fixed in
+  `write_tauri_project()` and documented in the "Native shell notes"
+  section of `docs/ARCHITECTURE.md`: (1) `tauri-build` aborts with
+  "`icons/icon.ico` not found" — Windows resource embedding needs a real
+  `.ico`, not just the `.png`; (2) an **absolute** `frontendDist` is
+  loaded at runtime as `file://<dir>/`, so the webview shows a directory
+  listing, never the app — the frontend is now copied into the project
+  and referenced relative (`../frontend`) so `generate_context!()`
+  embeds it and serves it over the app protocol; (3) shinylive's service
+  worker (which webR needs) refuses Tauri's default `http://tauri.localhost`
+  origin — fixed with `tauri-plugin-localhost`, which serves the embedded
+  frontend over `http://localhost:<port>`. The three Linux-caught
+  template bugs (absolute-path `frontendDist` handling, non-default
+  `identifier`, unconditional `icons/icon.png`, plus the `platform`
+  `arg_match(multiple = TRUE)` default-subset bug) still stand.
+  One wart worth knowing: `tauri-plugin-localhost` opens a local HTTP
+  listener, so Windows Firewall shows a one-time "allow network access"
+  prompt on first launch. The app renders and works regardless of the
+  choice (the webview reaches it over loopback, which bypasses the
+  firewall), but for a locked-down target that prompt is friction; a
+  future refinement is to bind the listener to `127.0.0.1` explicitly.
 - **`enable_update_check()`**: the R-side file injection is unit
   tested; the generated JS was checked for syntax validity with `node
   --check` but never actually run in a browser against a real `fetch`.
