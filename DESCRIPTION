@@ -30,5 +30,5 @@ Suggests:
     httpuv,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
-URL: https://github.com/lauyeehow1986-hub/app_creator
-BugReports: https://github.com/lauyeehow1986-hub/app_creator/issues
+URL: https://github.com/lauyeehow1986-hub/App_creator
+BugReports: https://github.com/lauyeehow1986-hub/App_creator/issues
