@@ -157,6 +157,17 @@ above: PPM serves Windows binaries only for R versions it still builds
 for, so a very old R + a recent snapshot can fall back to source-only -
 keep the R version and snapshot date close.
 
+**Verified end-to-end on Windows.** A real
+`build_portable(r_portable_version = "4.2.0", snapshot = "2023-01-01")`
+of the demo app pulled every package from PPM's R-4.2 Windows-binary shelf
+for that date and installed the *frozen* versions (`shiny 1.7.4`,
+`cli 3.5.0`, `rlang 1.0.6`, ... - not today's latest); the manifest
+recorded `r_version`/`snapshot`/`package_versions` matching the installed
+DESCRIPTIONs, and the resulting `run.bat` served the app (HTTP 200) - so a
+pinned bundle is both correctly-versioned and working. This is also why R
+4.2 + a 2023-01-01 snapshot was chosen: it stays inside R 4.2's PPM binary
+window, per the caveat above.
+
 ## Native-runtime provisioning (portable-only, `R/target-portable.R`)
 
 Some packages are only a thin R binding to a **native runtime that lives
