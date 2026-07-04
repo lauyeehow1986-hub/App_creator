@@ -72,6 +72,23 @@ demo_app <- system.file("examples", "demo-app", package = "shinyalcatraz")
 build_wasm(demo_app, out_dir = "dist/wasm")
 ```
 
+By default `build_wasm()` runs a **pre-flight compatibility check** first
+and aborts with a clear list if your app depends on packages that can't
+run in a browser bundle — either because they have no WebAssembly build
+(e.g. `ggradar`, or `webshot2`, which needs headless Chrome) or because
+they were installed from GitHub (which trips a confusing
+`get_github_wasm_assets()` 404). Run it standalone to see the report
+without building, or pass `check_deps = FALSE` to skip:
+
+```r
+check_wasm_packages("path/to/app")            # what won't work, and why
+build_wasm("path/to/app", check_deps = FALSE) # skip the pre-flight
+```
+
+If a flagged package is only *installed from GitHub* but does have a webR
+binary (common for CRAN-archived packages), reinstall it from CRAN — or
+clear its `Remote*`/`Github*` `DESCRIPTION` fields — and it'll work.
+
 **Run on the target**
 
 Copy `dist/wasm/` over, then either:
@@ -96,12 +113,13 @@ runtime. Larger output (~150–300 MB, scales with dependencies).
 
 **Build-machine prerequisites (Windows)**
 
-1. **7-Zip** on `PATH` (unpacks the R-Portable installer). Install it and
-   ensure `7z` resolves:
+1. **7-Zip** (unpacks the R-Portable installer). A standard Windows
+   install (`C:\Program Files\7-Zip`) is found automatically — the
+   installer doesn't add itself to `PATH`, so `build_portable()` looks in
+   the usual locations for you. Only a *non-standard* install needs `7z`
+   on `PATH`:
    ```powershell
-   # e.g. add to PATH for the session:
-   $env:PATH = "C:\Program Files\7-Zip;" + $env:PATH
-   7z          # should print 7-Zip's banner
+   $env:PATH = "C:\path\to\7-Zip;" + $env:PATH
    ```
    On Linux build machines, `p7zip-full` provides `7z`.
 2. Internet at build time (downloads R-Portable from SourceForge, cached
@@ -250,8 +268,14 @@ matches your dev R.
   don't trust. Turn off the AV's "HTTPS scanning / Web Shield" (or use a
   network without it), then retry. This bit us hard during verification —
   it is the first thing to check when *every* HTTPS client suddenly fails.
-- **`build_portable()` errors that 7-Zip isn't found.** Put `7z` on `PATH`
-  (see B‑1).
+- **`build_portable()` errors that 7-Zip isn't found.** A standard
+  `C:\Program Files\7-Zip` install is auto-detected; if yours is
+  elsewhere, put `7z` on `PATH` (see B‑1).
+- **`build_wasm()` fails on a package (GitHub 404, or "not wasm
+  compatible").** Run `check_wasm_packages("your/app")` to list every
+  incompatible dependency up front and why (no wasm build vs.
+  GitHub-installed), then remove/replace or reinstall-from-CRAN as
+  advised.
 - **`build_portable()` package install fails for a package that exists.**
   No Windows binary for the pinned R series — bump `r_portable_version`
   (see "Pinning" above).

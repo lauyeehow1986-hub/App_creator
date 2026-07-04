@@ -37,16 +37,31 @@ test_that("build_tauri is honest about unimplemented backend/platform combos", {
   expect_error(build_tauri(demo_app, platform = "ios"), regexp = "not implemented")
 })
 
-test_that("write_tauri_project generates a project pointing at the given frontend_dist", {
+test_that("write_tauri_project embeds the frontend via a relative path", {
   project_dir <- fs::path_temp("shinyalcatraz-tauri-project")
+  if (fs::dir_exists(project_dir)) fs::dir_delete(project_dir)
+  fs::dir_create(project_dir)
   on.exit(fs::dir_delete(project_dir))
-  write_tauri_project(project_dir, frontend_dist = "/some/wasm/dist",
+
+  frontend <- fs::path_temp("shinyalcatraz-tauri-frontend")
+  if (fs::dir_exists(frontend)) fs::dir_delete(frontend)
+  fs::dir_create(frontend)
+  writeLines("<html></html>", fs::path(frontend, "index.html"))
+  on.exit(fs::dir_delete(frontend), add = TRUE)
+
+  write_tauri_project(project_dir, frontend_dist = frontend,
                        app_name = "My Demo App", identifier = "com.example.demo")
 
   conf <- jsonlite::read_json(fs::path(project_dir, "src-tauri", "tauri.conf.json"))
   expect_identical(conf$identifier, "com.example.demo")
-  expect_identical(conf$build$frontendDist, "/some/wasm/dist")
+  # frontend is copied into the project and referenced relative to the config,
+  # so generate_context!() embeds it (an absolute path is loaded as file:// at
+  # runtime and shows a directory listing - see docs/ARCHITECTURE.md).
+  expect_identical(conf$build$frontendDist, "../frontend")
+  expect_true(fs::file_exists(fs::path(project_dir, "frontend", "index.html")))
   expect_true(fs::file_exists(fs::path(project_dir, "src-tauri", "icons", "icon.png")))
+  # icon.ico is required for the Windows resource embed
+  expect_true(fs::file_exists(fs::path(project_dir, "src-tauri", "icons", "icon.ico")))
   expect_true(fs::file_exists(fs::path(project_dir, "src-tauri", "Cargo.toml")))
 })
 
@@ -155,4 +170,32 @@ test_that("enable_update_check errors clearly on a missing manifest or index.htm
   fs::dir_create(bundle_dir)
   on.exit(fs::dir_delete(bundle_dir))
   expect_error(enable_update_check(bundle_dir, "https://example.com/v.json"))
+})
+
+test_that("find_7zip returns a scalar string and honours PATH when 7z is present", {
+  res <- find_7zip()
+  expect_type(res, "character")
+  expect_length(res, 1L)
+  on_path <- Sys.which("7z")
+  if (nzchar(on_path)) expect_identical(res, unname(on_path))
+})
+
+test_that("check_wasm_packages short-circuits (no network) for a dependency-free app", {
+  dep_dir <- fs::path_temp("shinyalcatraz-nodeps")
+  fs::dir_create(dep_dir)
+  on.exit(fs::dir_delete(dep_dir))
+  writeLines("x <- 1 + 1", fs::path(dep_dir, "app.R"))
+  res <- check_wasm_packages(dep_dir)
+  expect_true(res$checked)
+  expect_identical(res$no_wasm_build, character(0))
+  expect_identical(res$from_github, character(0))
+})
+
+test_that("check_wasm_packages passes a plain shiny-only app (network)", {
+  skip_if(demo_app == "", "demo app not installed")
+  skip_if_not(nzchar(Sys.getenv("SHINYALCATRAZ_RUN_NETWORK_TESTS")),
+              "set SHINYALCATRAZ_RUN_NETWORK_TESTS=1 to run this slow, network-dependent test")
+  res <- check_wasm_packages(demo_app)
+  skip_if(!isTRUE(res$checked), "webR repo unreachable")
+  expect_identical(res$no_wasm_build, character(0))
 })

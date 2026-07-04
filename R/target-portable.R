@@ -148,6 +148,31 @@ extract_library_calls <- function(expr) {
   c(found, sub)
 }
 
+#' Locate the 7-Zip executable
+#'
+#' The Windows 7-Zip installer does *not* add itself to `PATH`, so a
+#' `Sys.which("7z")` alone fails on a perfectly normal install. Check
+#' `PATH` first, then the standard install locations before giving up.
+#' @keywords internal
+#' @noRd
+find_7zip <- function() {
+  found <- Sys.which("7z")
+  if (nzchar(found)) return(unname(found))
+  if (.Platform$OS.type == "windows") {
+    candidates <- c(
+      file.path(Sys.getenv("ProgramFiles"), "7-Zip", "7z.exe"),
+      file.path(Sys.getenv("ProgramFiles(x86)"), "7-Zip", "7z.exe"),
+      file.path(Sys.getenv("ProgramW6432"), "7-Zip", "7z.exe"),
+      "C:/Program Files/7-Zip/7z.exe",
+      "C:/Program Files (x86)/7-Zip/7z.exe"
+    )
+    candidates <- candidates[nzchar(candidates)]
+    hit <- candidates[file.exists(candidates)]
+    if (length(hit)) return(hit[[1]])
+  }
+  ""
+}
+
 #' Download and cache a portable R runtime for Windows
 #' @keywords internal
 #' @noRd
@@ -196,14 +221,15 @@ fetch_r_portable <- function(cache_dir, version = NULL) {
 
   extract_dir <- fs::path(cache_dir, paste0(".extract-", ver))
   fs::dir_create(extract_dir)
-  seven_zip <- Sys.which("7z")
+  seven_zip <- find_7zip()
   if (nzchar(seven_zip)) {
     system2(seven_zip, c("x", "-y", shQuote(archive), paste0("-o", shQuote(extract_dir))),
             stdout = FALSE, stderr = FALSE)
   } else {
     cli::cli_abort(c(
-      "!" = "7-Zip ({.code 7z}) is required on the build machine to unpack R-Portable.",
-      "i" = "Install it (e.g. {.code apt-get install p7zip-full} or {.url https://www.7-zip.org}) and retry."
+      "!" = "7-Zip ({.code 7z}) is required on the build machine to unpack R-Portable, but wasn't found.",
+      "i" = "Install it ({.code apt-get install p7zip-full} on Linux, or {.url https://www.7-zip.org} on Windows).",
+      "i" = "If it's already installed on Windows, its folder (e.g. {.path C:/Program Files/7-Zip}) just isn't on {.envvar PATH} - this build looks there automatically, so a standard install should be picked up; a non-standard install needs {.code 7z} on {.envvar PATH}."
     ))
   }
 

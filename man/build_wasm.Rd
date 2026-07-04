@@ -4,7 +4,13 @@
 \alias{build_wasm}
 \title{Build the pure-browser WebAssembly (shinylive/webR) target}
 \usage{
-build_wasm(app_dir, out_dir = "dist/wasm", serve_launcher = TRUE, ...)
+build_wasm(
+  app_dir,
+  out_dir = "dist/wasm",
+  serve_launcher = TRUE,
+  check_deps = TRUE,
+  ...
+)
 }
 \arguments{
 \item{app_dir}{Path to a directory containing a runnable Shiny app
@@ -17,6 +23,12 @@ build_wasm(app_dir, out_dir = "dist/wasm", serve_launcher = TRUE, ...)
 \verb{http://localhost} using whatever local static-server tooling is
 already on the machine, sidestepping the \verb{file://} CORS/MIME
 restrictions some browsers apply to WASM + service workers.}
+
+\item{check_deps}{If \code{TRUE} (default), run \code{\link[=check_wasm_packages]{check_wasm_packages()}}
+first and abort with a clear, actionable list if the app depends on
+packages that can't run in a WebAssembly bundle (no webR binary, or
+installed from GitHub) - instead of letting \code{shinylive::export()}
+fail cryptically partway through. Set \code{FALSE} to skip the check.}
 
 \item{...}{Passed through to \code{shinylive::export()}.}
 }

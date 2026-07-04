@@ -11,8 +11,8 @@ Given a Shiny application, builds one or more self-contained, copy-and-run deplo
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/lauyeehow1986-hub/app_creator}
-  \item Report bugs at \url{https://github.com/lauyeehow1986-hub/app_creator/issues}
+  \item \url{https://github.com/lauyeehow1986-hub/App_creator}
+  \item Report bugs at \url{https://github.com/lauyeehow1986-hub/App_creator/issues}
 }
 
 }

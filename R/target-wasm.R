@@ -20,13 +20,20 @@
 #'   `http://localhost` using whatever local static-server tooling is
 #'   already on the machine, sidestepping the `file://` CORS/MIME
 #'   restrictions some browsers apply to WASM + service workers.
+#' @param check_deps If `TRUE` (default), run [check_wasm_packages()]
+#'   first and abort with a clear, actionable list if the app depends on
+#'   packages that can't run in a WebAssembly bundle (no webR binary, or
+#'   installed from GitHub) - instead of letting `shinylive::export()`
+#'   fail cryptically partway through. Set `FALSE` to skip the check.
 #' @param ... Passed through to `shinylive::export()`.
 #' @return Invisibly, the build manifest (also written as
 #'   `manifest.json` inside `out_dir`).
 #' @export
-build_wasm <- function(app_dir, out_dir = "dist/wasm", serve_launcher = TRUE, ...) {
+build_wasm <- function(app_dir, out_dir = "dist/wasm", serve_launcher = TRUE,
+                       check_deps = TRUE, ...) {
   check_app_dir(app_dir)
   rlang::check_installed("shinylive", reason = "to build the wasm target")
+  if (isTRUE(check_deps)) assert_wasm_compatible(app_dir)
 
   fs::dir_create(fs::path_dir(fs::path_abs(out_dir)))
   cli::cli_inform("Exporting {.path {app_dir}} to a shinylive/webR bundle...")
@@ -141,4 +148,135 @@ serve_ps1_lines <- function(port) {
     "  $response.OutputStream.Close()",
     "}"
   )
+}
+
+#' Check an app's package dependencies for WebAssembly compatibility
+#'
+#' A pre-flight for [build_wasm()]. It statically detects the packages an
+#' app uses (via [scan_r_package_deps()]), expands their recursive
+#' dependency tree, and checks each against the webR package repository
+#' (`repo.r-wasm.org`), flagging two things that otherwise only surface
+#' as a confusing failure partway through `shinylive::export()`:
+#'
+#' * **No WebAssembly build** - packages (or their dependencies) with no
+#'   binary in the webR repo at all. These cannot run in a browser-only
+#'   bundle and must be removed or swapped for a wasm-available
+#'   alternative. Transitive blockers are reported with the direct
+#'   dependency that pulls them in (e.g. `websocket (via webshot2)`).
+#' * **Installed from GitHub** - packages whose local install metadata
+#'   points at a GitHub repo. `shinylive` will try to fetch a matching
+#'   GitHub *release* for them and fail if none exists (the common
+#'   `get_github_wasm_assets()` 404). If such a package is *also* in the
+#'   webR repo, reinstalling it from CRAN (or clearing its
+#'   `Remote*`/`Github*` `DESCRIPTION` fields) is enough; if not, it has
+#'   to go.
+#'
+#' Availability is checked against several recent R minor-version shelves
+#' and unioned, so it stays correct as webR's bundled R version moves.
+#' The check is fail-soft: if the webR repo can't be reached it warns and
+#' returns rather than blocking a build.
+#'
+#' @param app_dir Directory containing the Shiny app.
+#' @param r_versions webR repo R-version shelves to check (unioned).
+#' @return Invisibly, a list: `no_wasm_build`, `from_github`,
+#'   `github_but_wasm_available` (character vectors), `pulled_by` (named
+#'   vector mapping each blocker to the direct dep that pulls it, or `""`
+#'   if it is itself a direct dep), and `checked` (`FALSE` if the repo
+#'   was unreachable).
+#' @export
+check_wasm_packages <- function(app_dir, r_versions = c("4.5", "4.4", "4.3")) {
+  direct <- scan_r_package_deps(app_dir)
+  empty <- list(no_wasm_build = character(0), from_github = character(0),
+                github_but_wasm_available = character(0),
+                pulled_by = character(0), checked = TRUE)
+  if (length(direct) == 0) return(invisible(empty))
+
+  ip <- utils::installed.packages()
+  installed <- rownames(ip)
+  which_deps <- c("Depends", "Imports", "LinkingTo")
+  rec <- tools::package_dependencies(intersect(direct, installed), db = ip,
+                                     recursive = TRUE, which = which_deps)
+  all_deps <- sort(unique(c(direct, unlist(rec, use.names = FALSE))))
+  base_rec <- rownames(utils::installed.packages(priority = c("base", "recommended")))
+  candidates <- setdiff(all_deps, base_rec)
+
+  wasm <- character(0)
+  reached <- FALSE
+  for (rv in r_versions) {
+    ap <- tryCatch(
+      suppressWarnings(rownames(utils::available.packages(
+        contriburl = sprintf("https://repo.r-wasm.org/bin/emscripten/contrib/%s", rv)))),
+      error = function(e) NULL
+    )
+    if (length(ap)) { wasm <- union(wasm, ap); reached <- TRUE }
+  }
+  if (!reached) {
+    cli::cli_warn(c(
+      "!" = "Couldn't reach the webR package repo to check wasm compatibility - skipping the pre-flight check.",
+      "i" = "The build will still run; a genuinely incompatible package would surface as an error during export."
+    ))
+    empty$checked <- FALSE
+    return(invisible(empty))
+  }
+
+  no_wasm <- sort(setdiff(candidates, wasm))
+
+  # Map each transitive blocker back to the direct dep(s) that pull it in,
+  # so the advice is "remove webshot2", not "remove websocket".
+  pulled_by <- vapply(no_wasm, function(p) {
+    if (p %in% direct) return("")
+    pull <- Filter(function(d) {
+      dd <- tryCatch(tools::package_dependencies(d, db = ip, recursive = TRUE,
+                                                 which = which_deps)[[1]],
+                     error = function(e) character(0))
+      p %in% dd
+    }, intersect(direct, installed))
+    paste(unlist(pull), collapse = ", ")
+  }, character(1))
+
+  # GitHub provenance only matters for directly-installed packages
+  # (transitive deps of CRAN packages are themselves on CRAN).
+  from_github <- Filter(function(p) {
+    d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
+    rt <- if (inherits(d, "packageDescription")) d$RemoteType else NULL
+    !is.null(rt) && grepl("github", rt, ignore.case = TRUE)
+  }, intersect(direct, installed))
+  from_github <- sort(unlist(from_github))
+
+  invisible(list(
+    no_wasm_build = no_wasm,
+    from_github = from_github,
+    github_but_wasm_available = sort(intersect(from_github, wasm)),
+    pulled_by = pulled_by,
+    checked = TRUE
+  ))
+}
+
+#' Abort a wasm build with a clear list if any dependency is incompatible
+#' @keywords internal
+#' @noRd
+assert_wasm_compatible <- function(app_dir) {
+  res <- check_wasm_packages(app_dir)
+  if (!isTRUE(res$checked)) return(invisible())
+
+  hard <- res$no_wasm_build
+  fixable <- res$github_but_wasm_available
+  if (length(hard) == 0 && length(fixable) == 0) return(invisible())
+
+  hard_lab <- vapply(hard, function(p) {
+    via <- res$pulled_by[[p]]
+    if (!is.null(via) && nzchar(via)) sprintf("%s (via %s)", p, via) else p
+  }, character(1))
+
+  msg <- c("x" = "{.fn build_wasm}: this app depends on packages that can't run in a WebAssembly bundle.")
+  if (length(hard)) {
+    msg <- c(msg, "!" = "No webR/WebAssembly build (remove or replace): {.pkg {hard_lab}}")
+  }
+  if (length(fixable)) {
+    msg <- c(msg,
+      "!" = "Installed from GitHub (shinylive looks for a usually-missing GitHub release): {.pkg {fixable}}",
+      "i" = "These do have a webR binary - reinstall from CRAN, or clear their {.field Remote*}/{.field Github*} {.file DESCRIPTION} fields.")
+  }
+  msg <- c(msg, "i" = "Fix the above, or call {.code build_wasm(check_deps = FALSE)} to skip this check.")
+  cli::cli_abort(msg)
 }
