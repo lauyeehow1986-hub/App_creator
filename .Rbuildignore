@@ -7,3 +7,9 @@
 ^CLAUDE\.md$
 ^AGENTS\.md$
 ^cran-comments\.md$
+^dist$
+^build$
+^node_modules$
+^src-tauri$
+^wasm-frontend$
+^shinylive$
