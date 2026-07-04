@@ -45,6 +45,27 @@ build-machine prerequisites — set up only the target(s) you actually use.
 
 ---
 
+## Dependencies at a glance
+
+Everything here is on the **build machine only** — the target never needs
+any of it. **Do you need Rust, Docker, etc.?** Only for the specific target:
+
+| Build target | Extra build-machine dependencies | Rust? | Docker? | Target needs |
+|---|---|---|---|---|
+| `build_wasm()` | `shinylive` R package + internet | **No** | **No** | a modern browser |
+| `build_portable()` (Windows) | 7-Zip + internet | **No** | **No** | nothing (R is bundled) |
+| `build_tauri()` (desktop) | wasm prereqs **+** Rust (`rustup`) + a C++ linker (MSVC Build Tools on Windows / WebKitGTK on Linux) + a Tauri CLI + internet | **Yes** | **No** | WebView2 (preinstalled on Win 10 21H2+ / Win 11) |
+
+- **Rust is only for `build_tauri()`.** `build_wasm()` and `build_portable()`
+  never touch it.
+- **Docker is never required.** Even for a GitHub-only package with no
+  WebAssembly binary, you use **r-universe** (which builds the wasm binary in
+  the cloud) rather than a local wasm toolchain — see
+  [Including a package with no wasm binary](#including-a-package-with-no-wasm-binary-eg-a-github-only-package).
+- These are one-time installs; the per-target sections below have the details.
+
+---
+
 ## Setup, step by step, per target
 
 ### A. `build_wasm()` — pure browser (WebAssembly)
@@ -89,24 +110,55 @@ If a flagged package is only *installed from GitHub* but does have a webR
 binary (common for CRAN-archived packages), reinstall it from CRAN — or
 clear its `Remote*`/`Github*` `DESCRIPTION` fields — and it'll work.
 
-**No wasm binary anywhere (e.g. a GitHub-only package)?** webR runs
-pre-compiled WebAssembly, not R source, so a wasm binary has to *exist*.
-The robust, offline-preserving way is [r-universe](https://r-universe.dev):
-it auto-builds wasm binaries for any public git package, and shinylive
-fetches + bundles them at build time (so the target still needs no
-internet). `shinyalcatraz` can generate the registry for you from your
-app's GitHub/GitLab/Bitbucket-installed dependencies:
+#### Including a package with no wasm binary (e.g. a GitHub-only package)
 
-```r
-write_runiverse_registry("path/to/app", "packages.json")
-```
+webR runs pre-compiled WebAssembly, not R source, so a package's **wasm
+binary has to exist somewhere shinylive can fetch it** — `repo.r-wasm.org`, a
+GitHub *release*, Bioconductor, or an **r-universe**. For a GitHub-only
+package like `ggradar` that has none, the robust, offline-preserving fix is
+to put it on your own **r-universe**: it builds the wasm binary in the cloud
+(no local Docker or Rust), and `build_wasm()` bundles it at build time so the
+target still needs no internet. **Verified end-to-end** (the exported offline
+app renders the `ggradar` chart). Everything is R/CLI except one browser
+click:
 
-Commit that `packages.json` to a GitHub repo named
-`<your-username>.r-universe.dev`, install the
-[r-universe app](https://github.com/apps/r-universe),
-then install those packages *from* your universe
-(`install.packages(..., repos = "https://<you>.r-universe.dev")`) so
-`build_wasm()` bundles their wasm binaries offline.
+1. **Generate the registry** from your app (finds every GitHub/GitLab/
+   Bitbucket-installed dependency):
+   ```r
+   write_runiverse_registry("path/to/app", "packages.json")
+   ```
+2. **Create a public GitHub repo named `<your-username>.r-universe.dev`** and
+   commit that `packages.json`. Scriptable with `gh`:
+   ```sh
+   gh repo create <you>.r-universe.dev --public --source=. --push
+   ```
+3. **Install the r-universe app** — the *one* manual step (an OAuth consent you
+   do yourself): [github.com/apps/r-universe](https://github.com/apps/r-universe)
+   → Install → select that repo. r-universe then builds every target, including
+   **WebAssembly**, automatically.
+4. **Wait for the build**, then check it's live (a first build can queue on
+   r-universe's shared runners — minutes to ~an hour):
+   ```r
+   runiverse_status("path/to/app", universe = "https://<you>.r-universe.dev")
+   ```
+5. **Install the package *from* your universe** (this stamps its `Repository`
+   field, which is what shinylive keys off):
+   ```r
+   install.packages("ggradar",
+     repos = c("https://<you>.r-universe.dev", "https://cloud.r-project.org"))
+   ```
+6. **Build** — the pre-flight now recognises r-universe packages, so no
+   `check_deps = FALSE` needed:
+   ```r
+   build_wasm("path/to/app", out_dir = "dist/wasm")
+   ```
+7. **Verify** the wasm binary landed in the bundle:
+   ```r
+   runiverse_status("path/to/app", bundle = "dist/wasm")
+   ```
+
+Adding another such package later is just `write_runiverse_registry()` → push
+to that repo → it rebuilds automatically.
 
 **Run on the target**
 
