@@ -119,21 +119,65 @@ code-only review:
    there instead of its own - observed as `shiny`'s install crashing
    with `LoadLibrary failure: The specified procedure could not be
    found` while loading a `digest.dll` built for the wrong R ABI. Fixed
-   by temporarily clearing `R_LIBS_USER`/`R_LIBS_SITE`/`R_LIBS` via
-   `Sys.setenv()` before the `system2()` call (not via `system2()`'s own
-   `env` argument - verified separately that `env` is unreliable on this
-   R/Windows combination, failing even a trivial `system2("cmd", ...,
-   env = "FOO=bar")` with status 5).
+   by setting `R_LIBS_USER`/`R_LIBS_SITE`/`R_LIBS` via `Sys.setenv()`
+   before the `system2()` call (not via `system2()`'s own `env` argument -
+   verified separately that `env` is unreliable on this R/Windows
+   combination, failing even a trivial `system2("cmd", ..., env =
+   "FOO=bar")` with status 5).
+
+   **Refinement (found when the default R source moved to a *current* R -
+   see below):** clearing these vars to `""` is *not* isolation. Empty
+   `R_LIBS_USER` makes R fall back to the default per-user path
+   (`%LOCALAPPDATA%/R/win-library/<major.minor>`), and when the bundled R
+   is the same `major.minor` as the build machine's R (e.g. both 4.5) that
+   path *is* the build machine's library. `install.packages()` then finds
+   the app's dependencies already present there (ABI-compatible this time,
+   since the versions match) and installs only the *top-level* packages -
+   shipping a bundle that holds `shiny` but none of its 29 deps and dies at
+   launch with `there is no package called 'R6'`. The old 4.2.0 default
+   dodged this purely because no `win-library/4.2` existed on the (4.5)
+   build machine. The real fix: point `R_LIBS_USER` at the *bundle's own
+   (initially empty) library*, so nothing leaks in and every dependency is
+   forced to install into the bundle. Caught by actually running a
+   GitHub-source (R 4.5.1) bundle, not by the 4.2.0 one.
 3. **`install.packages()` prefers a newer source release over an older
-   binary.** R-Portable is pinned to a fixed, aging R version (currently
-   4.2.0); CRAN stops refreshing that R-series' Windows *binary* repo
-   well before it stops publishing new *source* releases, so for any
-   actively-maintained package `install.packages()`'s default
-   binary-vs-source preference eventually flips to source - on a machine
-   with no guaranteed Rtools. Fixed by forcing `type = "win.binary"`, so
-   a missing binary now fails loudly and immediately instead of
-   silently attempting (and, per bug 2 above, sometimes half-succeeding
-   into) a source build.
+   binary.** When the bundled R is an aging version (the `sourceforge`
+   source is effectively frozen at 4.2.0), CRAN stops refreshing that
+   R-series' Windows *binary* repo well before it stops publishing new
+   *source* releases, so for any actively-maintained package
+   `install.packages()`'s default binary-vs-source preference eventually
+   flips to source - on a machine with no guaranteed Rtools. Fixed by
+   forcing `type = "win.binary"`, so a missing binary now fails loudly and
+   immediately instead of silently attempting (and, per bug 2 above,
+   sometimes half-succeeding into) a source build. The default
+   `github` R source (recent R, see below) also sidesteps this by keeping
+   the bundled R inside its current binary window.
+
+## Where the portable R comes from (`fetch_r_portable()`)
+
+Two sources, `r_source`:
+
+- **`"github"` (default)** -
+  [selkamand/r-portable-windows](https://github.com/selkamand/r-portable-windows)
+  GitHub releases: plain zips of recent R (4.0.3 / 4.2.3 / 4.3.0 / 4.5.1
+  at time of writing; latest auto-resolved from the releases API when
+  `r_portable_version` is `NULL`), GPL-2, predictable URLs, no PortableApps
+  `.paf` self-extractor (so no 7-Zip needed for this source). Its
+  `etc/Rprofile.site` is a one-liner `.libPaths(.Library)`; harmless here
+  because the install pass and `run.bat` both invoke R with `--vanilla`,
+  which skips site profiles (an external `R_LIBS_USER` still wins under
+  `--vanilla`, verified).
+- **`"sourceforge"`** - the classic PortableApps R-Portable (`.paf.exe`
+  unpacked with 7-Zip). Its "latest" has been stuck at **4.2.0** for years,
+  which is the whole reason `github` is now the default: a *current* R is
+  what makes `snapshot=` reproducibility usable (PPM serves Windows
+  binaries only inside an R version's current window). Kept as a fallback.
+
+**Verified end-to-end on Windows** (default `github` source): a
+`build_portable(snapshot = "2026-01-01")` of the demo app auto-resolved and
+downloaded R 4.5.1, installed shiny's full 30-package tree as R-4.5
+binaries frozen at that snapshot (`shiny 1.12.1`), and `run.bat` served the
+app (HTTP 200). Getting there is what surfaced the bug-2 refinement above.
 
 All three are fixed in `R/target-portable.R`; a from-scratch
 `build_portable()` → `run.bat` → real Shiny app in a real browser run

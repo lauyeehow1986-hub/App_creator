@@ -195,17 +195,16 @@ runtime. Larger output (~150–300 MB, scales with dependencies).
 
 **Build-machine prerequisites (Windows)**
 
-1. **7-Zip** (unpacks the R-Portable installer). A standard Windows
-   install (`C:\Program Files\7-Zip`) is found automatically — the
-   installer doesn't add itself to `PATH`, so `build_portable()` looks in
-   the usual locations for you. Only a *non-standard* install needs `7z`
-   on `PATH`:
-   ```powershell
-   $env:PATH = "C:\path\to\7-Zip;" + $env:PATH
-   ```
-   On Linux build machines, `p7zip-full` provides `7z`.
-2. Internet at build time (downloads R-Portable from SourceForge, cached
-   after the first run, and the app's package **binaries** from CRAN).
+1. **7-Zip** — only needed for `r_source = "sourceforge"` (unpacks its
+   `.paf.exe`). The default `r_source = "github"` ships plain zips, so 7-Zip
+   isn't required for it. A standard Windows install
+   (`C:\Program Files\7-Zip`) is found automatically; a non-standard one
+   needs `7z` on `PATH` (`$env:PATH = "C:\path\to\7-Zip;" + $env:PATH`). On
+   Linux build machines, `p7zip-full` provides `7z`.
+2. Internet at build time (downloads a portable R build — by default the
+   recent [selkamand/r-portable-windows](https://github.com/selkamand/r-portable-windows)
+   release, cached after the first run — and the app's package **binaries**
+   from CRAN).
 
 **Build**
 
@@ -213,8 +212,9 @@ runtime. Larger output (~150–300 MB, scales with dependencies).
 build_portable(
   demo_app,
   out_dir = "dist/portable",
-  platform = "windows",
-  r_portable_version = "4.2.0"   # optional; see "R versions" below
+  platform = "windows"
+  # r_source = "github" (default) fetches a recent portable R (currently 4.5.1);
+  # r_portable_version = "4.5.1" to pin it. "sourceforge" is the legacy source.
 )
 ```
 
@@ -233,8 +233,8 @@ can differ. To lock both:
 ```r
 build_portable(
   my_app, platform = "windows",
-  r_portable_version = "4.4.1",   # pin R
-  snapshot           = "2025-03-01"  # pin every CRAN package to that day's versions
+  r_portable_version = "4.5.1",       # pin R (a version your r_source offers)
+  snapshot           = "2026-01-01"   # pin every CRAN package to that day's versions
 )
 ```
 
@@ -242,15 +242,16 @@ build_portable(
 [Posit Public Package Manager](https://packagemanager.posit.co) snapshot
 instead of the floating latest, so every rebuild resolves the *same*
 versions (no `renv` needed). Each bundle's `manifest.json` also records
-`r_version`, `snapshot`, and `package_versions` (the exact version of every
-package that landed), so any bundle is auditable and reproducible without a
-rebuild.
+`r_version`, `r_source`, `snapshot`, and `package_versions` (the exact
+version of every package that landed), so any bundle is auditable and
+reproducible without a rebuild.
 
 > **Keep the R version and snapshot date close.** PPM only serves Windows
 > *binaries* for R versions it still builds for; pinning a very old R with a
 > recent snapshot can leave only source packages (which then need a compiler
-> on the build machine). Pairing an R version with a snapshot from around
-> when that R was current avoids this.
+> on the build machine). The default `r_source = "github"` gives a recent R
+> (currently 4.5.1), so a recent snapshot date pairs cleanly — verified with
+> R 4.5.1 + the 2026-01-01 snapshot (installs `shiny 1.12.1`).
 
 #### Packages that need a native runtime (rJava, tesseract, RMariaDB, rstan)
 

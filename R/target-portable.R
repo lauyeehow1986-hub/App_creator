@@ -50,11 +50,17 @@
 #' @param packages Character vector of R package names to install into
 #'   the bundle. If `NULL` (default), auto-detected from `app_dir`'s R
 #'   files via [scan_r_package_deps()].
-#' @param r_portable_version R-Portable version to fetch, e.g.
-#'   `"4.2.0"`. If `NULL` (default), uses whatever
-#'   `sourceforge.net/projects/rportable/files/latest` currently
-#'   resolves to. Pin it (together with `snapshot`) for a reproducible
-#'   bundle.
+#' @param r_portable_version Portable R version to fetch, e.g. `"4.5.1"`.
+#'   If `NULL` (default), uses the latest release from the chosen
+#'   `r_source`. Pin it (together with `snapshot`) for a reproducible
+#'   bundle. Available versions depend on `r_source` (the `"github"`
+#'   source currently offers 4.0.3 / 4.2.3 / 4.3.0 / 4.5.1).
+#' @param r_source Where to fetch the portable R runtime from:
+#'   `"github"` (default, selkamand/r-portable-windows - recent R via
+#'   GitHub releases) or `"sourceforge"` (the classic PortableApps
+#'   R-Portable, effectively frozen at 4.2.0). `"github"` is preferred
+#'   because a newer R has a wider *current* CRAN-snapshot binary window
+#'   (see `snapshot`).
 #' @param snapshot Optional CRAN snapshot date `"YYYY-MM-DD"` for
 #'   **reproducible package versions**. When set, CRAN packages are
 #'   installed from that day's [Posit Public Package
@@ -100,6 +106,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
                             platform = c("windows", "macos", "linux"),
                             packages = NULL,
                             r_portable_version = NULL,
+                            r_source = c("github", "sourceforge"),
                             snapshot = NULL,
                             cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
                             port = 8973,
@@ -109,6 +116,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   check_app_dir(app_dir)
   platform <- rlang::arg_match(platform)
   runtimes <- rlang::arg_match(runtimes)
+  r_source <- rlang::arg_match(r_source)
   native_runtime <- resolve_runtime_preset(runtimes, native_runtime)
   if (platform != "windows") {
     cli::cli_abort(c(
@@ -121,7 +129,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   pkgs <- packages %||% scan_r_package_deps(app_dir)
   cli::cli_inform("Detected package dependencies: {.pkg {pkgs}}")
 
-  r_portable_src <- fetch_r_portable(cache_dir, version = r_portable_version)
+  r_portable_src <- fetch_r_portable(cache_dir, version = r_portable_version, source = r_source)
 
   fs::dir_create(out_dir)
   bundle_r_dir <- fs::path(out_dir, "R-Portable")
@@ -149,6 +157,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
     # and the exact version of every package that landed in the bundle - so this
     # build can be identified and reproduced without diffing files.
     r_version = r_version %||% NA_character_,
+    r_source = r_source,
     snapshot = snapshot %||% NA_character_,
     package_versions = as.list(installed_package_versions(lib_dir)),
     runtimes = runtimes,
@@ -269,9 +278,77 @@ find_7zip <- function() {
 }
 
 #' Download and cache a portable R runtime for Windows
+#'
+#' Two sources, because the classic one is stuck in the past:
+#'  * `"github"` (default) - selkamand/r-portable-windows GitHub releases:
+#'    plain zips of recent R (4.0.3 / 4.2.3 / 4.3.0 / 4.5.1 as of writing),
+#'    predictable URLs, no PortableApps `.paf` self-extractor. Newer R means
+#'    a wider *current* Posit PM binary window, which is what makes
+#'    `snapshot=` reproducibility actually usable.
+#'  * `"sourceforge"` - the original PortableApps R-Portable. Only really
+#'    offers 4.2.0 now (its "latest" hasn't moved), kept as a fallback.
 #' @keywords internal
 #' @noRd
-fetch_r_portable <- function(cache_dir, version = NULL) {
+fetch_r_portable <- function(cache_dir, version = NULL, source = c("github", "sourceforge")) {
+  source <- rlang::arg_match(source)
+  if (source == "github") fetch_r_portable_github(cache_dir, version)
+  else fetch_r_portable_sourceforge(cache_dir, version)
+}
+
+# selkamand/r-portable-windows: recent R as a plain zip, one dir per release.
+#' @keywords internal
+#' @noRd
+fetch_r_portable_github <- function(cache_dir, version = NULL) {
+  fs::dir_create(cache_dir)
+  if (is.null(version)) {
+    rel <- tryCatch(
+      jsonlite::fromJSON("https://api.github.com/repos/selkamand/r-portable-windows/releases/latest"),
+      error = function(e) cli::cli_abort("Couldn't resolve the latest r-portable-windows release: {conditionMessage(e)}. Pass {.arg r_portable_version} explicitly."))
+    version <- sub("^R-", "", rel$tag_name)
+  }
+  cached <- fs::path(cache_dir, paste0("R-Portable-", version))
+  if (fs::dir_exists(fs::path(cached, "bin"))) {
+    cli::cli_inform("Using cached R-Portable {version} from {.path {cached}}.")
+    return(cached)
+  }
+  url <- sprintf(
+    "https://github.com/selkamand/r-portable-windows/releases/download/R-%s/r-portable-windows-R-%s.zip",
+    version, version)
+  archive <- fs::path(cache_dir, sprintf("r-portable-%s.zip", version))
+  if (!fs::file_exists(archive)) {
+    cli::cli_inform("Downloading portable R {version} (selkamand/r-portable-windows, one-time then cached)...")
+    curl_bin <- Sys.which("curl")
+    if (nzchar(curl_bin)) {
+      status <- system2(curl_bin, c(curl_windows_ssl_args(), "-sSL", "--max-time", "600", "-o", shQuote(archive), shQuote(url)))
+      if (!identical(status, 0L) || !fs::file_exists(archive)) {
+        cli::cli_abort(c(
+          "!" = "Download of portable R {version} failed (curl exit status {status}).",
+          "i" = "Is {.val {version}} a released version? See {.url https://github.com/selkamand/r-portable-windows/releases}."))
+      }
+    } else {
+      utils::download.file(url, archive, mode = "wb", quiet = FALSE)
+    }
+  }
+  extract_dir <- fs::path(cache_dir, paste0(".extract-", version))
+  if (fs::dir_exists(extract_dir)) fs::dir_delete(extract_dir)
+  unzip_archive(archive, extract_dir)
+  # The zip nests everything under a single R-<version>/ dir; flatten it.
+  top <- fs::path(extract_dir, paste0("R-", version))
+  if (!fs::dir_exists(fs::path(top, "bin"))) {
+    cand <- fs::dir_ls(extract_dir, type = "directory")
+    top <- cand[fs::dir_exists(fs::path(cand, "bin"))]
+    if (length(top) == 0) cli::cli_abort("Unexpected r-portable zip layout - no {.path bin} dir found after extraction.")
+    top <- top[[1]]
+  }
+  fs::dir_copy(top, cached)
+  fs::dir_delete(extract_dir)
+  fs::file_delete(archive)
+  cached
+}
+
+#' @keywords internal
+#' @noRd
+fetch_r_portable_sourceforge <- function(cache_dir, version = NULL) {
   fs::dir_create(cache_dir)
 
   url <- if (is.null(version)) {
@@ -783,14 +860,23 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs, snapshot = 
   cran_pkgs <- setdiff(non_remote, bioc)
   extra_repos <- custom_repo_urls(cran_pkgs)
 
-  # system2()'s own `env` argument is unreliable on Windows (verified: it makes
-  # even a trivial system2("cmd", ..., env = "FOO=bar") fail with status 5) -
-  # clear R_LIBS* via Sys.setenv() and rely on ordinary child-process
-  # environment inheritance instead, so the bundled R doesn't pick up the build
-  # machine's (ABI-incompatible) user library.
+  # Isolate the bundled R from the build machine's own library, so it installs
+  # the app's *full* dependency tree into the bundle (not just the top-level
+  # packages, silently skipping deps it thinks are already present).
+  #  * system2()'s own `env` argument is unreliable on Windows (verified: it
+  #    makes even a trivial system2("cmd", ..., env = "FOO=bar") fail with
+  #    status 5), so we set the vars in this process and let the child inherit.
+  #  * Point R_LIBS_USER at the *bundle* library, NOT "". Empty is not
+  #    isolation: R then falls back to the default per-user path
+  #    (%LOCALAPPDATA%/R/win-library/<ver>), and when the bundled R is the same
+  #    major.minor as the build machine's R that path IS the build machine's
+  #    library - so install.packages() finds the deps already there (ABI-
+  #    compatible) and installs only the top-level packages, shipping a bundle
+  #    that dies at runtime with "there is no package called '<dep>'". Pointing
+  #    at the (initially empty) bundle library forces every dep to install here.
   isolate_vars <- c("R_LIBS_USER", "R_LIBS_SITE", "R_LIBS")
   old_vals <- Sys.getenv(isolate_vars, unset = NA, names = TRUE)
-  Sys.setenv(R_LIBS_USER = "", R_LIBS_SITE = "", R_LIBS = "")
+  Sys.setenv(R_LIBS_USER = as.character(lib_dir), R_LIBS_SITE = "", R_LIBS = "")
   on.exit({
     to_restore <- old_vals[!is.na(old_vals)]
     if (length(to_restore) > 0) do.call(Sys.setenv, as.list(to_restore))

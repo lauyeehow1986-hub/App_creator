@@ -10,6 +10,7 @@ build_portable(
   platform = c("windows", "macos", "linux"),
   packages = NULL,
   r_portable_version = NULL,
+  r_source = c("github", "sourceforge"),
   snapshot = NULL,
   cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
   port = 8973,
@@ -31,11 +32,18 @@ build_portable(
 the bundle. If \code{NULL} (default), auto-detected from \code{app_dir}'s R
 files via \code{\link[=scan_r_package_deps]{scan_r_package_deps()}}.}
 
-\item{r_portable_version}{R-Portable version to fetch, e.g.
-\code{"4.2.0"}. If \code{NULL} (default), uses whatever
-\code{sourceforge.net/projects/rportable/files/latest} currently
-resolves to. Pin it (together with \code{snapshot}) for a reproducible
-bundle.}
+\item{r_portable_version}{Portable R version to fetch, e.g. \code{"4.5.1"}.
+If \code{NULL} (default), uses the latest release from the chosen
+\code{r_source}. Pin it (together with \code{snapshot}) for a reproducible
+bundle. Available versions depend on \code{r_source} (the \code{"github"}
+source currently offers 4.0.3 / 4.2.3 / 4.3.0 / 4.5.1).}
+
+\item{r_source}{Where to fetch the portable R runtime from:
+\code{"github"} (default, selkamand/r-portable-windows - recent R via
+GitHub releases) or \code{"sourceforge"} (the classic PortableApps
+R-Portable, effectively frozen at 4.2.0). \code{"github"} is preferred
+because a newer R has a wider \emph{current} CRAN-snapshot binary window
+(see \code{snapshot}).}
 
 \item{snapshot}{Optional CRAN snapshot date \code{"YYYY-MM-DD"} for
 \strong{reproducible package versions}. When set, CRAN packages are
