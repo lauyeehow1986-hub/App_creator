@@ -185,7 +185,10 @@ serve_ps1_lines <- function(port) {
 #'   was unreachable).
 #' @export
 check_wasm_packages <- function(app_dir, r_versions = c("4.6", "4.5", "4.4")) {
-  direct <- scan_r_package_deps(app_dir)
+  # include_commented = TRUE: shinylive reads commented-out library() calls and
+  # tries to fetch them, so the pre-flight must see them too or it gives false
+  # confidence (passes, then shinylive::export() fails on the commented package).
+  direct <- scan_r_package_deps(app_dir, include_commented = TRUE)
   empty <- list(no_wasm_build = character(0), from_github = character(0),
                 github_but_wasm_available = character(0),
                 pulled_by = character(0), checked = TRUE)
@@ -282,6 +285,8 @@ assert_wasm_compatible <- function(app_dir) {
       "!" = "Installed from GitHub (shinylive looks for a usually-missing GitHub release): {.pkg {fixable}}",
       "i" = "These do have a webR binary - reinstall from CRAN, or clear their {.field Remote*}/{.field Github*} {.file DESCRIPTION} fields.")
   }
-  msg <- c(msg, "i" = "Fix the above, or call {.code build_wasm(check_deps = FALSE)} to skip this check.")
+  msg <- c(msg,
+    "i" = "A commented-out {.code library(pkg)} still counts - shinylive's scanner reads it. Delete the line to drop the package.",
+    "i" = "Fix the above, or call {.code build_wasm(check_deps = FALSE)} to skip this check.")
   cli::cli_abort(msg)
 }

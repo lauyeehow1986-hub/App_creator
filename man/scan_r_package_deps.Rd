@@ -4,10 +4,17 @@
 \alias{scan_r_package_deps}
 \title{Statically scan an app's R files for package dependencies}
 \usage{
-scan_r_package_deps(app_dir)
+scan_r_package_deps(app_dir, include_commented = FALSE)
 }
 \arguments{
 \item{app_dir}{Directory containing the app's R files.}
+
+\item{include_commented}{If \code{TRUE}, also pick up \code{library()}/\code{require()}
+calls that are \emph{commented out}. Off by default (a commented-out
+\code{library()} isn't a real dependency), but the \code{build_wasm()}
+pre-flight turns it on because \code{shinylive}'s own dependency scanner
+(renv-based) reads commented \code{library()} lines and will try to fetch
+those packages - so the pre-flight must see them too.}
 }
 \value{
 Sorted, deduplicated character vector of package names

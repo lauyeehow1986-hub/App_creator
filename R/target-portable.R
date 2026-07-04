@@ -109,10 +109,16 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
 #' for `pkg::fn()` usage instead.
 #'
 #' @param app_dir Directory containing the app's R files.
+#' @param include_commented If `TRUE`, also pick up `library()`/`require()`
+#'   calls that are *commented out*. Off by default (a commented-out
+#'   `library()` isn't a real dependency), but the `build_wasm()`
+#'   pre-flight turns it on because `shinylive`'s own dependency scanner
+#'   (renv-based) reads commented `library()` lines and will try to fetch
+#'   those packages - so the pre-flight must see them too.
 #' @return Sorted, deduplicated character vector of package names
 #'   (excluding base/recommended packages already in R-Portable).
 #' @export
-scan_r_package_deps <- function(app_dir) {
+scan_r_package_deps <- function(app_dir, include_commented = FALSE) {
   r_files <- fs::dir_ls(app_dir, recurse = TRUE, regexp = "[.][Rr]$", type = "file")
 
   # Skip build outputs and vendored/library dirs that aren't the app's own
@@ -141,7 +147,20 @@ scan_r_package_deps <- function(app_dir) {
       regmatches(text, gregexpr("\\b[a-zA-Z][a-zA-Z0-9._]*(?=:{2,3})", text, perl = TRUE))[[1]]
     )
 
-    c(from_calls, from_ns)
+    # Optionally also match library()/require() in the raw text, which catches
+    # commented-out calls that `parse()` (and thus `from_calls`) skips - shinylive
+    # detects those and tries to fetch them.
+    from_commented <- if (include_commented) {
+      m <- suppressWarnings(regmatches(
+        text,
+        gregexpr("(?:library|require)\\s*\\(\\s*[\"']?([A-Za-z][A-Za-z0-9._]*)", text, perl = TRUE)
+      )[[1]])
+      sub("^(?:library|require)\\s*\\(\\s*[\"']?", "", m, perl = TRUE)
+    } else {
+      character(0)
+    }
+
+    c(from_calls, from_ns, from_commented)
   }))
 
   sort(unique(setdiff(pkgs, c(base_pkgs, "shinyalcatraz"))))

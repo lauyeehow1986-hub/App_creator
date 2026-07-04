@@ -213,3 +213,17 @@ test_that("scan_r_package_deps ignores build-output dirs (dist/, shinylive/)", {
   expect_true(all(c("dplyr", "DT") %in% deps))
   expect_false(any(c("Eigen", "ArrayXd", "BiocGenerics", "waffle") %in% deps))
 })
+
+test_that("scan_r_package_deps optionally catches commented-out library() calls", {
+  d <- fs::path_temp("shinyalcatraz-commented")
+  if (fs::dir_exists(d)) fs::dir_delete(d)
+  fs::dir_create(d)
+  on.exit(fs::dir_delete(d))
+  writeLines(c("library(dplyr)", "#library(ggradar)", "# require(waffle)"),
+             fs::path(d, "app.R"))
+  # default: a commented-out library() is not a dependency
+  expect_false("ggradar" %in% scan_r_package_deps(d))
+  # opt-in: shinylive reads them, so the wasm pre-flight must too
+  with_comments <- scan_r_package_deps(d, include_commented = TRUE)
+  expect_true(all(c("dplyr", "ggradar", "waffle") %in% with_comments))
+})
