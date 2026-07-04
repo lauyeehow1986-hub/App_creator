@@ -9,7 +9,7 @@ write_runiverse_registry(app_dir, path = "packages.json")
 \arguments{
 \item{app_dir}{Directory containing the Shiny app.}
 
-\item{path}{Output path for the registry JSON.}
+\item{path}{Output path for the registry JSON (merged into if it exists).}
 }
 \value{
 Invisibly, \code{path} (or an empty string if there was nothing to write).
@@ -20,4 +20,12 @@ registry you commit to a repo named \verb{<your-username>.r-universe.dev} in
 your GitHub account to have r-universe build (and wasm-compile) those
 packages, so \code{\link[=build_wasm]{build_wasm()}} can bundle them offline. See the README
 "r-universe" setup.
+}
+\details{
+The universe registry is shared across all your apps, so this \strong{merges}
+with an existing \code{packages.json} at \code{path} rather than overwriting it:
+packages already listed are kept (an app's scan only sees its own deps, and
+a package can be temporarily un-resolvable - e.g. mid-rebuild on your
+universe - so overwriting would silently drop it). Run it in a clone of your
+\verb{<username>.r-universe.dev} repo to accumulate packages safely.
 }

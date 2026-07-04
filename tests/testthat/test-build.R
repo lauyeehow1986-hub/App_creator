@@ -310,6 +310,17 @@ test_that("runiverse_registry is empty for an app with no remote packages", {
   expect_length(runiverse_registry(d), 0L)
 })
 
+test_that("write_runiverse_registry merges with an existing packages.json (never drops entries)", {
+  d <- fs::path_temp("shinyalcatraz-merge"); if (fs::dir_exists(d)) fs::dir_delete(d)
+  fs::dir_create(d); on.exit(fs::dir_delete(d))
+  writeLines("library(stats)", fs::path(d, "app.R"))          # app has no resolvable remotes
+  pj <- fs::path(d, "packages.json")
+  writeLines('[{"package":"ggradar","url":"https://github.com/ricardo-bion/ggradar"}]', pj)
+  suppressWarnings(write_runiverse_registry(d, pj))
+  j <- jsonlite::fromJSON(pj)
+  expect_true("ggradar" %in% j$package)                        # existing entry preserved
+})
+
 test_that("runiverse_status returns an empty frame for an app with no remotes", {
   d <- fs::path_temp("shinyalcatraz-rustatus")
   if (fs::dir_exists(d)) fs::dir_delete(d)

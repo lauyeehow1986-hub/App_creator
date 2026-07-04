@@ -780,22 +780,41 @@ runiverse_registry <- function(app_dir) {
 #' packages, so [build_wasm()] can bundle them offline. See the README
 #' "r-universe" setup.
 #'
+#' The universe registry is shared across all your apps, so this **merges**
+#' with an existing `packages.json` at `path` rather than overwriting it:
+#' packages already listed are kept (an app's scan only sees its own deps, and
+#' a package can be temporarily un-resolvable - e.g. mid-rebuild on your
+#' universe - so overwriting would silently drop it). Run it in a clone of your
+#' `<username>.r-universe.dev` repo to accumulate packages safely.
+#'
 #' @param app_dir Directory containing the Shiny app.
-#' @param path Output path for the registry JSON.
+#' @param path Output path for the registry JSON (merged into if it exists).
 #' @return Invisibly, `path` (or an empty string if there was nothing to write).
 #' @export
 write_runiverse_registry <- function(app_dir, path = "packages.json") {
-  entries <- runiverse_registry(app_dir)
+  found <- runiverse_registry(app_dir)
+  # Merge with any existing registry so regenerating from one app never drops
+  # packages another app (or an earlier run) already put there. Existing entries
+  # win (they may carry a hand-picked url/branch); new packages are appended.
+  existing <- if (fs::file_exists(path)) {
+    tryCatch({ j <- jsonlite::fromJSON(path, simplifyVector = FALSE); if (is.list(j)) j else list() },
+             error = function(e) list())
+  } else list()
+  have <- vapply(existing, function(e) e$package %||% "", character(1))
+  entries <- existing
+  added <- character(0)
+  for (e in found) {
+    if (!(e$package %in% have)) { entries[[length(entries) + 1L]] <- e; added <- c(added, e$package) }
+  }
   if (length(entries) == 0) {
-    cli::cli_inform(c(
-      "i" = "No GitHub/GitLab/Bitbucket-installed packages found in {.path {app_dir}} - nothing to add to an r-universe."
-    ))
+    cli::cli_inform("i" = "No non-CRAN packages found in {.path {app_dir}}, and no existing {.path {path}} - nothing to write.")
     return(invisible(""))
   }
   jsonlite::write_json(entries, path, auto_unbox = TRUE, pretty = TRUE)
   pkgs <- vapply(entries, function(e) e$package, character(1))
   cli::cli_inform(c(
     "v" = "Wrote {length(entries)} package{?s} to {.path {path}}: {.pkg {pkgs}}.",
+    if (length(added)) c("v" = "Added {length(added)}: {.pkg {added}}.") else c("i" = "No new packages to add (existing entries kept)."),
     "i" = "Commit it as {.file packages.json} in a GitHub repo named {.val <your-username>.r-universe.dev}, then install the {.href https://github.com/apps/r-universe} app."
   ))
   invisible(path)
