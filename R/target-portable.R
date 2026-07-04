@@ -114,16 +114,32 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
 #' @export
 scan_r_package_deps <- function(app_dir) {
   r_files <- fs::dir_ls(app_dir, recurse = TRUE, regexp = "[.][Rr]$", type = "file")
+
+  # Skip build outputs and vendored/library dirs that aren't the app's own
+  # source. Scanning e.g. a previous `dist/wasm` shinylive distribution (which
+  # bundles webR + package sources and C++ headers) turns every `Foo::` into a
+  # bogus "dependency" - Eigen, ArrayXd, BiocGenerics, ... - and its non-UTF-8
+  # data files trip parse/regex warnings.
+  ignore <- c("dist", "build", "node_modules", "src-tauri", "shinylive",
+              "wasm-frontend", "renv", "packrat", ".git", ".Rproj.user", "_snaps")
+  rel_parts <- strsplit(as.character(fs::path_rel(r_files, app_dir)), "/", fixed = TRUE)
+  r_files <- r_files[!vapply(rel_parts, function(p) any(p %in% ignore), logical(1))]
+
   base_pkgs <- rownames(utils::installed.packages(priority = c("base", "recommended")))
 
   pkgs <- unlist(lapply(r_files, function(f) {
-    exprs <- tryCatch(parse(f, keep.source = FALSE), error = function(e) NULL)
-    if (is.null(exprs)) return(character(0))
+    exprs <- tryCatch(suppressWarnings(parse(f, keep.source = FALSE)),
+                      error = function(e) NULL)
+    from_calls <- if (is.null(exprs)) character(0) else unlist(lapply(exprs, extract_library_calls))
 
-    from_calls <- unlist(lapply(exprs, extract_library_calls))
-
-    text <- paste(readLines(f, warn = FALSE), collapse = "\n")
-    from_ns <- regmatches(text, gregexpr("\\b[a-zA-Z][a-zA-Z0-9._]*(?=:{2,3})", text, perl = TRUE))[[1]]
+    text <- tryCatch(
+      iconv(paste(readLines(f, warn = FALSE, encoding = "UTF-8"), collapse = "\n"),
+            to = "UTF-8", sub = ""),
+      error = function(e) ""
+    )
+    from_ns <- suppressWarnings(
+      regmatches(text, gregexpr("\\b[a-zA-Z][a-zA-Z0-9._]*(?=:{2,3})", text, perl = TRUE))[[1]]
+    )
 
     c(from_calls, from_ns)
   }))

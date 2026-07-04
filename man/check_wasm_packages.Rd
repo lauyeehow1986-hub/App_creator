@@ -4,7 +4,7 @@
 \alias{check_wasm_packages}
 \title{Check an app's package dependencies for WebAssembly compatibility}
 \usage{
-check_wasm_packages(app_dir, r_versions = c("4.5", "4.4", "4.3"))
+check_wasm_packages(app_dir, r_versions = c("4.6", "4.5", "4.4"))
 }
 \arguments{
 \item{app_dir}{Directory containing the Shiny app.}

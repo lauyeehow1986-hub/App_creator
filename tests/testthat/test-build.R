@@ -199,3 +199,17 @@ test_that("check_wasm_packages passes a plain shiny-only app (network)", {
   skip_if(!isTRUE(res$checked), "webR repo unreachable")
   expect_identical(res$no_wasm_build, character(0))
 })
+
+test_that("scan_r_package_deps ignores build-output dirs (dist/, shinylive/)", {
+  app <- fs::path_temp("shinyalcatraz-scan-ignore")
+  if (fs::dir_exists(app)) fs::dir_delete(app)
+  fs::dir_create(fs::path(app, "dist", "wasm", "shinylive"))
+  on.exit(fs::dir_delete(app))
+  writeLines("library(dplyr); DT::datatable(iris)", fs::path(app, "app.R"))
+  # a previous build output full of C++ / package sources must NOT leak in
+  writeLines("Eigen::ArrayXd(); BiocGenerics::foo(); waffle::waffle()",
+             fs::path(app, "dist", "wasm", "shinylive", "junk.R"))
+  deps <- scan_r_package_deps(app)
+  expect_true(all(c("dplyr", "DT") %in% deps))
+  expect_false(any(c("Eigen", "ArrayXd", "BiocGenerics", "waffle") %in% deps))
+})

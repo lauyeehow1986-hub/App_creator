@@ -184,7 +184,7 @@ serve_ps1_lines <- function(port) {
 #'   if it is itself a direct dep), and `checked` (`FALSE` if the repo
 #'   was unreachable).
 #' @export
-check_wasm_packages <- function(app_dir, r_versions = c("4.5", "4.4", "4.3")) {
+check_wasm_packages <- function(app_dir, r_versions = c("4.6", "4.5", "4.4")) {
   direct <- scan_r_package_deps(app_dir)
   empty <- list(no_wasm_build = character(0), from_github = character(0),
                 github_but_wasm_available = character(0),
@@ -219,7 +219,12 @@ check_wasm_packages <- function(app_dir, r_versions = c("4.5", "4.4", "4.3")) {
     return(invisible(empty))
   }
 
-  no_wasm <- sort(setdiff(candidates, wasm))
+  # Only flag packages that are actually installed: a scanned `pkg::` token
+  # that resolves to no installed package is almost always a false match
+  # (a C++ namespace, an example in a comment, ...), and aborting a build on
+  # one of those is worse than missing a genuinely-absent package (which
+  # shinylive::export() would still surface).
+  no_wasm <- sort(setdiff(intersect(candidates, installed), wasm))
 
   # Map each transitive blocker back to the direct dep(s) that pull it in,
   # so the advice is "remove webshot2", not "remove websocket".
