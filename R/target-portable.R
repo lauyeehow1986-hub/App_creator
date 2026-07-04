@@ -20,7 +20,9 @@
 #'    R), so the installed binaries match the shipped R version/ABI.
 #'    CRAN packages install as Windows binaries; any dependency the
 #'    build machine got from GitHub is reinstalled via
-#'    `remotes::install_github()` (also run by the bundled R). After
+#'    `remotes::install_github()`, and Bioconductor packages (those with
+#'    a `biocViews` field) from the Bioconductor repos - all run by the
+#'    bundled R so the binaries match its ABI. After
 #'    install, the bundle library is checked and any package that failed
 #'    to install is reported, rather than silently shipping a bundle
 #'    that crashes on the target. The build machine needs internet for
@@ -417,6 +419,54 @@ install_github_into_bundle <- function(rscript, lib_dir, specs) {
   invisible()
 }
 
+#' Which of `pkgs` are Bioconductor packages
+#'
+#' Bioconductor packages declare a `biocViews` field in their
+#' `DESCRIPTION` - the reliable marker. CRAN's `install.packages()`
+#' can't fetch them, so `build_portable()` installs them from the
+#' Bioconductor repos instead (see `install_bioc_into_bundle()`).
+#' @keywords internal
+#' @noRd
+bioc_packages <- function(pkgs) {
+  keep <- vapply(pkgs, function(p) {
+    d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
+    inherits(d, "packageDescription") && !is.null(d$biocViews) && nzchar(d$biocViews)
+  }, logical(1))
+  pkgs[keep]
+}
+
+#' Install Bioconductor packages into the bundle via the bundle's Rscript
+#'
+#' Like `install_github_into_bundle()`: runs with the *bundled* R so the
+#' installed binaries match R-Portable's version/ABI. `BiocManager` is
+#' bootstrapped by copying the build machine's copy (it's pure R), and
+#' `BiocManager::repositories()` supplies the Bioconductor + CRAN repos
+#' for the bundled R's Bioc release, so `type = "win.binary"` fetches
+#' the matching Windows binaries (no Rtools needed - Bioconductor hosts
+#' binaries for each release).
+#' @keywords internal
+#' @noRd
+install_bioc_into_bundle <- function(rscript, lib_dir, pkgs) {
+  if (!fs::dir_exists(fs::path(lib_dir, "BiocManager"))) {
+    bm <- tryCatch(find.package("BiocManager"), error = function(e) NULL)
+    if (!is.null(bm)) tryCatch(fs::dir_copy(bm, fs::path(lib_dir, "BiocManager")),
+                               error = function(e) NULL)
+  }
+  lib <- gsub("\\\\", "/", as.character(fs::path_abs(lib_dir)))
+  expr <- sprintf(paste0(
+    '.libPaths(c("%s", .libPaths())); options(download.file.method = "wininet"); ',
+    'if (!requireNamespace("BiocManager", quietly = TRUE)) ',
+    'install.packages("BiocManager", lib = "%s", repos = "https://cloud.r-project.org", type = "win.binary"); ',
+    'install.packages(c(%s), lib = "%s", repos = BiocManager::repositories(), type = "win.binary")'),
+    lib, lib, paste(sprintf('"%s"', pkgs), collapse = ", "), lib
+  )
+  status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(expr)))
+  if (!identical(status, 0L)) {
+    cli::cli_warn("Bioconductor package install exited with status {status} - see output above.")
+  }
+  invisible()
+}
+
 #' Which required packages are missing from a bundle's library
 #' @keywords internal
 #' @noRd
@@ -433,10 +483,13 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   rscript <- fs::path(r_portable_dir, "bin", "x64", "Rscript.exe")
   if (!fs::file_exists(rscript)) rscript <- fs::path(r_portable_dir, "bin", "Rscript.exe")
 
-  # Packages the build machine installed from GitHub can't be fetched by CRAN's
-  # install.packages(); route those through remotes::install_github() instead.
+  # Split off packages CRAN's install.packages() can't fetch: GitHub remotes go
+  # through remotes::install_github(), Bioconductor packages through the Bioc
+  # repos. Whatever's left is plain CRAN.
   gh <- github_specs(pkgs)
-  cran_pkgs <- setdiff(pkgs, names(gh))
+  non_gh <- setdiff(pkgs, names(gh))
+  bioc <- bioc_packages(non_gh)
+  cran_pkgs <- setdiff(non_gh, bioc)
 
   # system2()'s own `env` argument is unreliable on Windows (verified: it makes
   # even a trivial system2("cmd", ..., env = "FOO=bar") fail with status 5) -
@@ -463,6 +516,11 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
     if (!identical(status, 0L)) {
       cli::cli_warn("CRAN package installation exited with status {status} - check the bundle's library before shipping it.")
     }
+  }
+
+  if (length(bioc) > 0) {
+    cli::cli_inform("Installing {length(bioc)} Bioconductor package{?s} into the bundle ({.pkg {bioc}})...")
+    install_bioc_into_bundle(rscript, lib_dir, bioc)
   }
 
   if (length(gh) > 0) {

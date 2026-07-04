@@ -243,3 +243,8 @@ test_that("github_specs ignores CRAN/base packages", {
   expect_length(github_specs(character(0)), 0L)
   expect_length(github_specs("stats"), 0L)
 })
+
+test_that("bioc_packages ignores CRAN/base packages", {
+  expect_length(bioc_packages(character(0)), 0L)
+  expect_length(bioc_packages("stats"), 0L)
+})

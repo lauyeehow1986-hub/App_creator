@@ -242,6 +242,12 @@ matches your dev R.
     by the bundle's *own* R so the ABI matches. Pure-R GitHub packages
     just work; a *compiled* GitHub package still needs Rtools in the
     bundled R. (`remotes` is bootstrapped into the bundle automatically.)
+  - **Bioconductor packages are handled too:** dependencies with a
+    `biocViews` field are installed from the Bioconductor repos
+    (`BiocManager::repositories()`, pinned to the bundled R's Bioc
+    release) as Windows binaries — no Rtools needed, since Bioconductor
+    ships binaries per release. (`BiocManager` is bootstrapped
+    automatically.)
   - If a required package can't be installed, the build **warns and
     lists it** rather than shipping a bundle that crashes on the target.
   - Consequence: dependencies loaded *dynamically* (e.g.
