@@ -239,9 +239,31 @@ test_that("missing_bundle_packages flags required packages absent from the libra
   expect_identical(missing_bundle_packages(lib, c("shiny", "dplyr")), character(0))
 })
 
-test_that("github_specs ignores CRAN/base packages", {
-  expect_length(github_specs(character(0)), 0L)
-  expect_length(github_specs("stats"), 0L)
+test_that("build_remote_install_expr covers every git-forge/URL remote type", {
+  gh <- list(RemoteType = "github", RemoteUsername = "u", RemoteRepo = "r", RemoteRef = "HEAD")
+  expect_match(build_remote_install_expr(gh, "L"), 'install_github\\("u/r"')
+  gl <- list(RemoteType = "gitlab", RemoteUsername = "u", RemoteRepo = "r",
+             RemoteHost = "gitlab.example.com", RemoteRef = "v1")
+  expect_match(build_remote_install_expr(gl, "L"),
+               'install_gitlab\\("u/r@v1", host = "gitlab.example.com"')
+  bb <- list(RemoteType = "bitbucket", RemoteUsername = "u", RemoteRepo = "r")
+  expect_match(build_remote_install_expr(bb, "L"), 'install_bitbucket\\("u/r"')
+  g <- list(RemoteType = "git", RemoteUrl = "https://x/y.git", RemoteRef = "main")
+  expect_match(build_remote_install_expr(g, "L"), 'install_git\\("https://x/y.git", ref = "main"')
+  u <- list(RemoteType = "url", RemoteUrl = "https://x/p.tar.gz")
+  expect_match(build_remote_install_expr(u, "L"), 'install_url\\("https://x/p.tar.gz"')
+  expect_null(build_remote_install_expr(list(RemoteType = "cran"), "L"))
+  expect_null(build_remote_install_expr(list(), "L"))
+})
+
+test_that("remote_install_specs ignores CRAN/base packages", {
+  expect_length(remote_install_specs(character(0), "L"), 0L)
+  expect_length(remote_install_specs("stats", "L"), 0L)
+})
+
+test_that("custom_repo_urls returns only real URL repositories", {
+  expect_length(custom_repo_urls(character(0)), 0L)
+  expect_length(custom_repo_urls("stats"), 0L)
 })
 
 test_that("bioc_packages ignores CRAN/base packages", {

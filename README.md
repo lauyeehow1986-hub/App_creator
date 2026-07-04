@@ -236,12 +236,18 @@ matches your dev R.
   `library()`, `require()`, and `pkg::fn` calls, resolves the full
   transitive tree, and installs it (as Windows binaries) into a private
   `library\` inside the bundle. It deliberately does **not** use `renv`.
-  - **GitHub packages are handled too:** any dependency you installed
-    from GitHub (e.g. `remotes::install_github("ricardo-bion/ggradar")`)
-    is reinstalled into the bundle via `remotes::install_github()`, run
-    by the bundle's *own* R so the ABI matches. Pure-R GitHub packages
-    just work; a *compiled* GitHub package still needs Rtools in the
-    bundled R. (`remotes` is bootstrapped into the bundle automatically.)
+  - **Remote-installed packages are handled too:** any dependency you
+    installed from a git forge or URL — **GitHub, GitLab, Bitbucket, a
+    generic git URL, or a source-tarball URL** (whatever `remotes`/`pak`
+    recorded as its `RemoteType`) — is reinstalled into the bundle via
+    the matching `remotes::install_*()`, run by the bundle's *own* R so
+    the ABI matches. Pure-R ones just work; a *compiled* remote package
+    still needs Rtools in the bundled R. (`remotes` is bootstrapped into
+    the bundle automatically.) *Verified end-to-end for GitHub; the other
+    forges go through the same `remotes` machinery.*
+  - **r-universe / Posit Package Manager:** packages from a custom
+    CRAN-like repo carry that repo's URL in their `Repository` field;
+    it's added to the install `repos` so they resolve.
   - **Bioconductor packages are handled too:** dependencies with a
     `biocViews` field are installed from the Bioconductor repos
     (`BiocManager::repositories()`, pinned to the bundled R's Bioc

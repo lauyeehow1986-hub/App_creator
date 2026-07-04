@@ -18,11 +18,16 @@
 #' 3. Dependencies are installed into a private library inside the
 #'    bundle using the *bundled* Rscript.exe (not the build machine's
 #'    R), so the installed binaries match the shipped R version/ABI.
-#'    CRAN packages install as Windows binaries; any dependency the
-#'    build machine got from GitHub is reinstalled via
-#'    `remotes::install_github()`, and Bioconductor packages (those with
-#'    a `biocViews` field) from the Bioconductor repos - all run by the
-#'    bundled R so the binaries match its ABI. After
+#'    Each dependency is routed by where the build machine got it:
+#'    CRAN packages install as Windows binaries; packages from a git
+#'    forge or URL (GitHub/GitLab/Bitbucket/generic git/tarball URL, per
+#'    the `RemoteType` in their `DESCRIPTION`) reinstall via the matching
+#'    `remotes::install_*()`; Bioconductor packages (a `biocViews` field)
+#'    from the Bioconductor repos; and packages from a custom CRAN-like
+#'    repo (r-universe, Posit Package Manager) via that repo's URL from
+#'    their `Repository` field - all run by the bundled R so the binaries
+#'    match its ABI. Anything a repo still can't provide but that's
+#'    installed and pure-R on the build machine is copied in. After
 #'    install, the bundle library is checked and any package that failed
 #'    to install is reported, rather than silently shipping a bundle
 #'    that crashes on the target. The build machine needs internet for
@@ -357,64 +362,106 @@ curl_windows_ssl_args <- function() {
 #' guaranteed to have Rtools. Forcing the binary means a missing binary
 #' fails loudly and immediately instead of silently attempting (and
 #' sometimes, as above, half-succeeding into) a source build.
-#' GitHub install specs for any of `pkgs` the build machine got from GitHub
+#' Build the R expression to reinstall one package from its recorded remote
 #'
-#' Returns a named character vector (names = package, values =
-#' `"user/repo"` or `"user/repo@ref"`) for packages whose *installed*
-#' `DESCRIPTION` records a GitHub remote. CRAN's `install.packages()`
-#' can't fetch these, so `build_portable()` routes them through
-#' `remotes::install_github()` instead.
+#' Covers every git-forge / URL remote type `remotes` (and `pak`) record
+#' in an installed package's `DESCRIPTION` `RemoteType`: `github`,
+#' `gitlab`, `bitbucket`, a generic `git` URL, and a source-tarball
+#' `url`. Returns `NULL` for anything else (`cran`/`standard`/`local`/
+#' `bioc`, handled elsewhere). CRAN's `install.packages()` can't fetch
+#' any of these, so `build_portable()` routes them through the matching
+#' `remotes::install_*()` instead.
+#' @param d A `packageDescription` (or a list with the same fields).
+#' @param lib Forward-slashed library path to install into.
 #' @keywords internal
 #' @noRd
-github_specs <- function(pkgs) {
+build_remote_install_expr <- function(d, lib) {
+  rt <- tolower(d$RemoteType %||% "")
+  ref <- d$RemoteRef %||% d$RemoteSha %||% ""
+  atref <- if (nzchar(ref) && !identical(ref, "HEAD")) paste0("@", ref) else ""
+  subdir <- if (!is.null(d$RemoteSubdir) && nzchar(d$RemoteSubdir)) paste0("/", d$RemoteSubdir) else ""
+  slug <- paste0(d$RemoteUsername %||% "", "/", d$RemoteRepo %||% "", subdir, atref)
+  switch(rt,
+    github = sprintf('remotes::install_github("%s", lib = "%s", upgrade = "never")', slug, lib),
+    gitlab = sprintf('remotes::install_gitlab("%s", host = "%s", lib = "%s", upgrade = "never")',
+                     slug, d$RemoteHost %||% "gitlab.com", lib),
+    bitbucket = sprintf('remotes::install_bitbucket("%s", lib = "%s", upgrade = "never")', slug, lib),
+    git = sprintf('remotes::install_git("%s", ref = "%s", lib = "%s", upgrade = "never")',
+                  d$RemoteUrl %||% "", if (nzchar(ref)) ref else "HEAD", lib),
+    url = sprintf('remotes::install_url("%s", lib = "%s")', d$RemoteUrl %||% "", lib),
+    NULL
+  )
+}
+
+#' Reinstall expressions for any of `pkgs` installed from a git/URL remote
+#' @return Named character vector: package -> `remotes::install_*()` expression.
+#' @keywords internal
+#' @noRd
+remote_install_specs <- function(pkgs, lib) {
+  lib <- gsub("\\\\", "/", as.character(lib))
   out <- character(0)
   for (p in pkgs) {
     d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
-    rt <- if (inherits(d, "packageDescription")) d$RemoteType else NULL
-    if (is.null(rt) || !grepl("github", rt, ignore.case = TRUE)) next
-    user <- d$RemoteUsername
-    repo <- d$RemoteRepo
-    if (is.null(user) || is.null(repo) || !nzchar(user) || !nzchar(repo)) next
-    spec <- paste0(user, "/", repo)
-    ref <- d$RemoteRef
-    if (!is.null(ref) && nzchar(ref) && !identical(ref, "HEAD")) {
-      spec <- paste0(spec, "@", ref)
-    }
-    out[[p]] <- spec
+    if (!inherits(d, "packageDescription")) next
+    e <- build_remote_install_expr(d, lib)
+    if (!is.null(e)) out[[p]] <- e
   }
   out
 }
 
-#' Install GitHub packages into the bundle via the bundle's own Rscript
+#' Non-CRAN repo URLs recorded for any of `pkgs` (r-universe, Posit PM, ...)
 #'
-#' Runs `remotes::install_github()` with the *bundled* R so the result
-#' matches R-Portable's version/ABI (the same reason CRAN installs use
-#' the bundled Rscript). `remotes` is bootstrapped into the bundle by
-#' copying the build machine's copy - it's pure R (no compiled code), so
-#' it loads fine under the older R - falling back to a binary install.
-#' The bundle library is put on `.libPaths()` so already-installed CRAN
-#' dependencies are reused rather than refetched. A GitHub package with
-#' *compiled* code will still fail here without Rtools in the bundled R;
-#' that surfaces in the post-install missing-package check.
+#' Packages installed from an r-universe or Posit Package Manager repo (or
+#' any custom CRAN-like repo) record that repo's URL in their `DESCRIPTION`
+#' `Repository` field rather than a `RemoteType`. Returning those URLs lets
+#' the CRAN install pass add them to `repos`, so a package that lives only
+#' there still resolves. (A plain-word `Repository` like `CRAN`/`RSPM` is
+#' ignored - only real URLs are added.)
 #' @keywords internal
 #' @noRd
-install_github_into_bundle <- function(rscript, lib_dir, specs) {
+custom_repo_urls <- function(pkgs) {
+  repos <- character(0)
+  for (p in pkgs) {
+    d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
+    r <- if (inherits(d, "packageDescription")) d$Repository else NULL
+    if (!is.null(r) && grepl("^https?://", r)) repos <- c(repos, sub("/+$", "", r))
+  }
+  unique(repos)
+}
+
+#' Install git/URL-remote packages into the bundle via the bundle's Rscript
+#'
+#' Runs the per-package `remotes::install_*()` expressions from
+#' [remote_install_specs()] (github, gitlab, bitbucket, git, url) with the
+#' *bundled* R so the result matches R-Portable's version/ABI (the same
+#' reason CRAN installs use the bundled Rscript). `remotes` is bootstrapped
+#' into the bundle by copying the build machine's copy - it's pure R (no
+#' compiled code), so it loads fine under the older R - falling back to a
+#' binary install. The bundle library is put on `.libPaths()` so already-
+#' installed CRAN dependencies are reused rather than refetched. A remote
+#' package with *compiled* code will still fail here without Rtools in the
+#' bundled R; that surfaces in the post-install missing-package check.
+#' @param exprs Named character vector of install expressions.
+#' @keywords internal
+#' @noRd
+install_remotes_into_bundle <- function(rscript, lib_dir, exprs) {
+  if (length(exprs) == 0) return(invisible())
   if (!fs::dir_exists(fs::path(lib_dir, "remotes"))) {
     bm <- tryCatch(find.package("remotes"), error = function(e) NULL)
     if (!is.null(bm)) tryCatch(fs::dir_copy(bm, fs::path(lib_dir, "remotes")),
                                error = function(e) NULL)
   }
   lib <- gsub("\\\\", "/", as.character(fs::path_abs(lib_dir)))
-  expr <- sprintf(paste0(
+  full <- sprintf(paste0(
     '.libPaths(c("%s", .libPaths())); options(download.file.method = "wininet"); ',
     'if (!requireNamespace("remotes", quietly = TRUE)) ',
     'install.packages("remotes", lib = "%s", repos = "https://cloud.r-project.org", type = "win.binary"); ',
-    'remotes::install_github(c(%s), lib = "%s", upgrade = "never")'),
-    lib, lib, paste(sprintf('"%s"', specs), collapse = ", "), lib
+    '%s'),
+    lib, lib, paste(unname(exprs), collapse = "; ")
   )
-  status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(expr)))
+  status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(full)))
   if (!identical(status, 0L)) {
-    cli::cli_warn("GitHub package install exited with status {status} - see output above.")
+    cli::cli_warn("Remote package install exited with status {status} - see output above.")
   }
   invisible()
 }
@@ -515,13 +562,17 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   rscript <- fs::path(r_portable_dir, "bin", "x64", "Rscript.exe")
   if (!fs::file_exists(rscript)) rscript <- fs::path(r_portable_dir, "bin", "Rscript.exe")
 
-  # Split off packages CRAN's install.packages() can't fetch: GitHub remotes go
-  # through remotes::install_github(), Bioconductor packages through the Bioc
-  # repos. Whatever's left is plain CRAN.
-  gh <- github_specs(pkgs)
-  non_gh <- setdiff(pkgs, names(gh))
-  bioc <- bioc_packages(non_gh)
-  cran_pkgs <- setdiff(non_gh, bioc)
+  # Split by how each package must be fetched (CRAN's install.packages() can't
+  # get most of these):
+  #  * git-forge / URL remotes (github/gitlab/bitbucket/git/url) -> remotes
+  #  * Bioconductor (biocViews field)                            -> Bioc repos
+  #  * everything else                                           -> CRAN, plus any
+  #    custom repo (r-universe / Posit PM) recorded in a Repository field
+  remote_exprs <- remote_install_specs(pkgs, lib_dir)
+  non_remote <- setdiff(pkgs, names(remote_exprs))
+  bioc <- bioc_packages(non_remote)
+  cran_pkgs <- setdiff(non_remote, bioc)
+  extra_repos <- custom_repo_urls(cran_pkgs)
 
   # system2()'s own `env` argument is unreliable on Windows (verified: it makes
   # even a trivial system2("cmd", ..., env = "FOO=bar") fail with status 5) -
@@ -539,10 +590,12 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
 
   if (length(cran_pkgs) > 0) {
     cli::cli_inform("Installing {length(cran_pkgs)} CRAN package{?s} into the bundle's private library...")
+    repos <- c("https://cloud.r-project.org", extra_repos)
     install_expr <- sprintf(
-      'options(download.file.method = "wininet"); install.packages(c(%s), lib = %s, repos = "https://cloud.r-project.org", type = "win.binary")',
+      'options(download.file.method = "wininet"); install.packages(c(%s), lib = %s, repos = c(%s), type = "win.binary")',
       paste(sprintf('"%s"', cran_pkgs), collapse = ", "),
-      sprintf('"%s"', gsub("\\\\", "/", as.character(lib_dir)))
+      sprintf('"%s"', gsub("\\\\", "/", as.character(lib_dir))),
+      paste(sprintf('"%s"', repos), collapse = ", ")
     )
     status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(install_expr)))
     if (!identical(status, 0L)) {
@@ -555,9 +608,9 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
     install_bioc_into_bundle(rscript, lib_dir, bioc)
   }
 
-  if (length(gh) > 0) {
-    cli::cli_inform("Installing {length(gh)} GitHub package{?s} into the bundle ({.pkg {names(gh)}}) via {.code remotes::install_github()}...")
-    install_github_into_bundle(rscript, lib_dir, unname(gh))
+  if (length(remote_exprs) > 0) {
+    cli::cli_inform("Installing {length(remote_exprs)} package{?s} from git/URL remotes ({.pkg {names(remote_exprs)}}) via {.pkg remotes}...")
+    install_remotes_into_bundle(rscript, lib_dir, remote_exprs)
   }
 
   # Last resort for anything no repo could provide (local source tarballs,
