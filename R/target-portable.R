@@ -507,7 +507,7 @@ write_runiverse_registry <- function(app_dir, path = "packages.json") {
   pkgs <- vapply(entries, function(e) e$package, character(1))
   cli::cli_inform(c(
     "v" = "Wrote {length(entries)} package{?s} to {.path {path}}: {.pkg {pkgs}}.",
-    "i" = "Commit it as {.file packages.json} in a repo named {.val universe} in your GitHub account, then install the {.href https://github.com/apps/r-universe} app."
+    "i" = "Commit it as {.file packages.json} in a GitHub repo named {.val <your-username>.r-universe.dev}, then install the {.href https://github.com/apps/r-universe} app."
   ))
   invisible(path)
 }

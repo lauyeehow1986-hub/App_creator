@@ -101,8 +101,9 @@ app's GitHub/GitLab/Bitbucket-installed dependencies:
 write_runiverse_registry("path/to/app", "packages.json")
 ```
 
-Commit that `packages.json` to a repo named `universe` in your GitHub
-account, install the [r-universe app](https://github.com/apps/r-universe),
+Commit that `packages.json` to a GitHub repo named
+`<your-username>.r-universe.dev`, install the
+[r-universe app](https://github.com/apps/r-universe),
 then install those packages *from* your universe
 (`install.packages(..., repos = "https://<you>.r-universe.dev")`) so
 `build_wasm()` bundles their wasm binaries offline.
