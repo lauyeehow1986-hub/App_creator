@@ -4,7 +4,7 @@ Guidance for Claude (and other AI assistants) working in this repository.
 
 ## What this project is
 
-`shinyalcatraz` (GitHub repo name: `app_creator`) is an R package that
+`shinyalcatraz` (GitHub repo name: `shiny_alcatraz`) is an R package that
 turns a Shiny app into one or more **portable, zero-admin-install
 bundles** for locked-down environments: copy the output folder onto the
 target machine (USB, network share, mapped drive) and run it, with no R

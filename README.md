@@ -36,7 +36,7 @@ copy-and-run folder and nothing else.
 
 ```r
 # install.packages("pak")
-pak::pkg_install("lauyeehow1986-hub/App_creator")
+pak::pkg_install("lauyeehow1986-hub/shiny_alcatraz")
 ```
 
 This pulls the package and its hard dependencies (`cli`, `fs`, `jsonlite`,
