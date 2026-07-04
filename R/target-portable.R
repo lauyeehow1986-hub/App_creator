@@ -69,6 +69,19 @@
 #'   list(server = TRUE), toolchain = list(rtools = TRUE))`. Set a
 #'   provider's `enabled = FALSE` to skip it. See
 #'   [native_runtime_providers()] and `docs/ARCHITECTURE.md`.
+#' @param runtimes Coarse control over the native runtimes (JVM, OCR data,
+#'   DB server, C++ toolchain), useful for shipping a small **lite** bundle
+#'   and a self-contained **full** one from the same app:
+#'   * `"auto"` (default) - bundle the lightweight runtimes a package needs
+#'     (JRE for `rJava`, training data for `tesseract`) automatically, and
+#'     the heavy ones (MariaDB server, Rtools) only if opted into via
+#'     `native_runtime`.
+#'   * `"all"` - bundle every runtime the app's packages need, including
+#'     the heavy opt-ins (largest, fully self-contained on the target).
+#'   * `"none"` - bundle no native runtime (smallest; the target must
+#'     already provide any JVM/DB/toolchain the app needs - you'll get a
+#'     warning naming what's missing).
+#'   Explicit `native_runtime` entries override this preset.
 #' @param ... Reserved for future options.
 #' @return Invisibly, the build manifest (also written as
 #'   `manifest.json` inside `out_dir`).
@@ -80,9 +93,12 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
                             cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
                             port = 8973,
                             native_runtime = list(),
+                            runtimes = c("auto", "all", "none"),
                             ...) {
   check_app_dir(app_dir)
   platform <- rlang::arg_match(platform)
+  runtimes <- rlang::arg_match(runtimes)
+  native_runtime <- resolve_runtime_preset(runtimes, native_runtime)
   if (platform != "windows") {
     cli::cli_abort(c(
       "!" = "{.fn build_portable}(platform = {.val {platform}}) is not implemented yet.",
@@ -118,6 +134,8 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   manifest <- write_build_manifest(out_dir, "portable", app_dir, extra = list(
     platform = platform,
     packages = pkgs,
+    runtimes = runtimes,
+    native_runtimes_bundled = attr(env_lines, "provisioned") %||% character(0),
     entry_point = "run.bat",
     launch = "Double-click run.bat - starts a local Shiny session and opens your default browser.",
     size = as.character(dir_size(out_dir))
@@ -859,6 +877,7 @@ provision_native_runtimes <- function(pkgs, out_dir, cache_dir, native_runtime =
     cli::cli_warn("Ignoring unknown {.arg native_runtime} entr{cli::qty(unknown)}{?y/ies}: {.val {unknown}} (known: {.val {names(providers)}}).")
   }
   lines <- character(0)
+  provisioned <- character(0)
   for (nm in names(providers)) {
     p <- providers[[nm]]
     hit <- intersect(p$pkgs, pkgs)
@@ -868,13 +887,36 @@ provision_native_runtimes <- function(pkgs, out_dir, cache_dir, native_runtime =
     # Rtools; hand it down unless the caller pinned it.
     opts$r_version <- opts$r_version %||% r_version
     if (isFALSE(opts$enabled)) {
-      cli::cli_inform(c("!" = "Native runtime {.val {nm}} is needed by {.pkg {hit}} but disabled ({.code native_runtime${nm}$enabled = FALSE}) - the bundle may not run offline."))
+      cli::cli_inform(c("!" = "Native runtime {.val {nm}} is needed by {.pkg {hit}} but disabled ({.code native_runtime${nm}$enabled = FALSE}) - the target must provide it (this is a {.emph lite} bundle)."))
       next
     }
     cli::cli_inform("Provisioning native runtime {.val {nm}} (for {.pkg {hit}})...")
     lines <- c(lines, p$provision(out_dir, cache_dir, opts))
+    provisioned <- c(provisioned, nm)
   }
+  attr(lines, "provisioned") <- provisioned
   lines
+}
+
+# Turn the coarse `runtimes` preset into a per-provider `native_runtime` list,
+# letting any explicit `native_runtime` entries the caller passed win.
+#' @keywords internal
+#' @noRd
+resolve_runtime_preset <- function(runtimes, native_runtime = list(),
+                                   providers = native_runtime_providers()) {
+  preset <- switch(runtimes,
+    auto = list(),
+    none = stats::setNames(lapply(names(providers), function(x) list(enabled = FALSE)),
+                           names(providers)),
+    all  = list(mariadb = list(server = TRUE), toolchain = list(rtools = TRUE))
+  )
+  # Per-provider merge so the caller's explicit options override the preset's
+  # without dropping the preset's other keys.
+  out <- list()
+  for (nm in union(names(preset), names(native_runtime))) {
+    out[[nm]] <- utils::modifyList(preset[[nm]] %||% list(), native_runtime[[nm]] %||% list())
+  }
+  out
 }
 
 # Unzip with utils::unzip, falling back to 7-Zip (utils::unzip chokes on some

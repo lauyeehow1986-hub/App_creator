@@ -353,6 +353,28 @@ test_that("provision_native_runtimes warns on an unknown native_runtime entry", 
                  "unknown")
 })
 
+test_that("resolve_runtime_preset expands auto/all/none correctly", {
+  # auto: no forced options
+  expect_identical(resolve_runtime_preset("auto"), list())
+  # none: every provider disabled
+  none <- resolve_runtime_preset("none")
+  expect_true(all(vapply(none, function(x) isFALSE(x$enabled), logical(1))))
+  expect_setequal(names(none), names(native_runtime_providers()))
+  # all: heavy opt-ins forced on
+  all <- resolve_runtime_preset("all")
+  expect_true(isTRUE(all$mariadb$server))
+  expect_true(isTRUE(all$toolchain$rtools))
+})
+
+test_that("resolve_runtime_preset lets explicit native_runtime override the preset", {
+  # user disables java even though 'all' would enable it
+  res <- resolve_runtime_preset("all", list(java = list(enabled = FALSE),
+                                            tesseract = list(langs = "fra")))
+  expect_true(isFALSE(res$java$enabled))
+  expect_identical(res$tesseract$langs, "fra")
+  expect_true(isTRUE(res$mariadb$server))     # preset key preserved
+})
+
 test_that("rtools_version_for maps an R version to its paired Rtools version", {
   expect_identical(rtools_version_for("4.5.1"), "45")
   expect_identical(rtools_version_for("4.2.0"), "42")

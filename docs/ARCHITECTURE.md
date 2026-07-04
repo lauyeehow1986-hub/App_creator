@@ -166,6 +166,17 @@ stages its runtime and returns the `run.bat` lines that point the app at
 it. `build_portable()` auto-selects providers from the dependency tree
 and threads per-provider options through its `native_runtime` argument.
 
+**Lite vs full bundles.** The `runtimes` argument is a coarse preset over
+that mechanism (`resolve_runtime_preset()` just expands it into a
+`native_runtime` list, with explicit entries winning): `"none"` disables
+every provider (smallest bundle - the target must supply the JVM/DB/
+toolchain, and the build warns which), `"all"` forces every runtime the
+app needs including the heavy opt-ins (self-contained), `"auto"` (default)
+bundles the lightweight ones and leaves the heavy ones opt-in. This is how
+you emit a small "lite" download and a self-contained "full" one from the
+same app; each `manifest.json` records its `runtimes` mode and the
+`native_runtimes_bundled` list so the two are identifiable without diffing.
+
 **Verification.** All four were run end-to-end (real download → stage →
 apply the exact env vars `run.bat` injects → exercise the runtime
 offline):

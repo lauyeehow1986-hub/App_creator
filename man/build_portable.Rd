@@ -13,6 +13,7 @@ build_portable(
   cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
   port = 8973,
   native_runtime = list(),
+  runtimes = c("auto", "all", "none"),
   ...
 )
 }
@@ -50,6 +51,22 @@ auto-selected from the dependency tree; this list only tunes them,
 e.g. \code{list(tesseract = list(langs = c("eng", "fra")), mariadb = list(server = TRUE), toolchain = list(rtools = TRUE))}. Set a
 provider's \code{enabled = FALSE} to skip it. See
 \code{\link[=native_runtime_providers]{native_runtime_providers()}} and \code{docs/ARCHITECTURE.md}.}
+
+\item{runtimes}{Coarse control over the native runtimes (JVM, OCR data,
+DB server, C++ toolchain), useful for shipping a small \strong{lite} bundle
+and a self-contained \strong{full} one from the same app:
+\itemize{
+\item \code{"auto"} (default) - bundle the lightweight runtimes a package needs
+(JRE for \code{rJava}, training data for \code{tesseract}) automatically, and
+the heavy ones (MariaDB server, Rtools) only if opted into via
+\code{native_runtime}.
+\item \code{"all"} - bundle every runtime the app's packages need, including
+the heavy opt-ins (largest, fully self-contained on the target).
+\item \code{"none"} - bundle no native runtime (smallest; the target must
+already provide any JVM/DB/toolchain the app needs - you'll get a
+warning naming what's missing).
+Explicit \code{native_runtime} entries override this preset.
+}}
 
 \item{...}{Reserved for future options.}
 }

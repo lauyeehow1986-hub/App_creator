@@ -259,6 +259,30 @@ All of these are verified end-to-end offline; the two opt-in paths
 not because they're unproven. See `docs/ARCHITECTURE.md` → "Native-runtime
 provisioning" for the verification detail.
 
+##### Shipping a **lite** and a **full** bundle
+
+For an app that needs one of these runtimes, you often want two downloads:
+a small one for machines that already have Java / a database / a compiler,
+and a self-contained one for locked-down targets. The `runtimes` argument
+switches between them without hand-writing the `native_runtime` options:
+
+```r
+# self-contained: bundle every runtime the app needs (largest)
+build_portable(my_app, out_dir = "dist/portable-full", runtimes = "all")
+
+# lite: bundle no native runtime (smallest; target must supply the JVM/DB/etc.
+# - you get a warning naming what's missing)
+build_portable(my_app, out_dir = "dist/portable-lite", runtimes = "none")
+```
+
+`runtimes = "auto"` (the default) sits in between: it bundles the
+lightweight runtimes automatically and leaves the heavy ones (DB server,
+Rtools) opt-in. Each bundle's `manifest.json` records its `runtimes` mode
+and exactly which runtimes were bundled, so the two are easy to tell apart.
+Explicit `native_runtime` entries still override the preset (e.g.
+`runtimes = "all"` plus `native_runtime = list(toolchain = list(enabled = FALSE))`
+= everything except Rtools).
+
 ---
 
 ### C. `build_tauri()` — native double-click desktop app
