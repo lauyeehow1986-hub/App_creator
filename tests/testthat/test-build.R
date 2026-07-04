@@ -416,3 +416,17 @@ test_that("write_portable_launcher injects native-runtime env lines before Rscri
   expect_length(env_at, 1L)
   expect_true(env_at < rscript_at)                 # env set before R starts
 })
+
+test_that("write_portable_launcher logs R output and ships a windowless launcher", {
+  d <- fs::path_temp("shinyalcatraz-launch2"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  write_portable_launcher(d, port = 8973)
+  bat <- readLines(fs::path(d, "run.bat"))
+  # R output is redirected to a log, and the log is popped open on a non-zero exit
+  expect_true(any(grepl("run_app.R >.*log.\\\\?last-run.txt", bat)))
+  expect_true(any(grepl("notepad", bat)))
+  expect_true(fs::dir_exists(fs::path(d, "log")))
+  # windowless launcher ships and calls run.bat hidden (Run ..., 0, False)
+  expect_true(fs::file_exists(fs::path(d, "run.vbs")))
+  vbs <- readLines(fs::path(d, "run.vbs"))
+  expect_true(any(grepl("run.bat", vbs)) && any(grepl(", 0, False", vbs, fixed = TRUE)))
+})

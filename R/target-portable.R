@@ -163,7 +163,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
     runtimes = runtimes,
     native_runtimes_bundled = attr(env_lines, "provisioned") %||% character(0),
     entry_point = "run.bat",
-    launch = "Double-click run.bat - starts a local Shiny session and opens your default browser.",
+    launch = "Double-click run.bat (shows a console you close to stop the app) or run.vbs (windowless). R output is logged to log/last-run.txt; on error the log opens automatically.",
     size = as.character(dir_size(out_dir))
   ))
   cli::cli_inform(c("v" = "portable bundle written to {.path {out_dir}} ({manifest$size})."))
@@ -941,20 +941,42 @@ write_portable_launcher <- function(out_dir, port, env_lines = character()) {
     sprintf('shiny::runApp("app", port = %d, launch.browser = TRUE, host = "127.0.0.1")', port)
   )
   writeLines(runner_r, fs::path(out_dir, "run_app.R"))
+  fs::dir_create(fs::path(out_dir, "log"))
 
   bat <- c(
     "@echo off",
     "cd /d %~dp0",
+    'if not exist "%~dp0log" mkdir "%~dp0log"',
     'set R_LIBS=%~dp0library',
     'set R_LIBS_USER=%~dp0library',
     # Native-runtime env vars (JAVA_HOME, TESSDATA_PREFIX, ...) go here, before R
     # starts, so the app's packages find their bundled runtime.
     env_lines,
-    '"%~dp0R-Portable\\bin\\x64\\Rscript.exe" --vanilla run_app.R',
+    "echo Starting the app - your browser will open shortly.",
+    "echo (Output is logged to log\\last-run.txt. Close this window to stop the app.)",
+    # Capture all R output to a log: a crash otherwise flashes a console and
+    # vanishes, leaving the user (and us) nothing to debug from.
+    '"%~dp0R-Portable\\bin\\x64\\Rscript.exe" --vanilla run_app.R > "%~dp0log\\last-run.txt" 2>&1',
+    "set _rc=%errorlevel%",
     # Rscript blocks until the app closes; clean up any bundled server after.
-    'if exist "%~dp0db-stop.bat" call "%~dp0db-stop.bat"'
+    'if exist "%~dp0db-stop.bat" call "%~dp0db-stop.bat"',
+    # On a non-zero exit, pop the log open - visible even when launched windowless
+    # via run.vbs (where there's no console to read).
+    'if not "%_rc%"=="0" start "" notepad "%~dp0log\\last-run.txt"'
   )
   writeLines(bat, fs::path(out_dir, "run.bat"))
+
+  # Optional windowless launcher: double-click for no console window at all.
+  # (run.bat still ships - it shows the console and is how you stop the app.)
+  vbs <- c(
+    "' Launch the app with no console window. Use run.bat to see the console / stop it.",
+    "Dim fso, sh, here",
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    "here = fso.GetParentFolderName(WScript.ScriptFullName)",
+    'Set sh = CreateObject("WScript.Shell")',
+    'sh.Run "cmd /c """ & here & "\\run.bat""", 0, False'
+  )
+  writeLines(vbs, fs::path(out_dir, "run.vbs"))
   invisible(out_dir)
 }
 

@@ -220,9 +220,17 @@ build_portable(
 
 **Run on the target**
 
-Copy `dist/portable/` over and double-click **`run.bat`**. It launches the
-app from the bundled `R-Portable\` against the private `library\` — no R
-install, no admin.
+Copy `dist/portable/` over, then double-click one of:
+
+- **`run.bat`** — launches the app in a console window you can close to stop
+  it. Launches from the bundled `R-Portable\` against the private
+  `library\` — no R install, no admin.
+- **`run.vbs`** — the same launch but **windowless** (no console box behind
+  the browser), for a more app-like feel.
+
+Either way, all R output is written to **`log\last-run.txt`**, and if the
+app exits with an error that log **opens automatically** — so a crash
+leaves a readable diagnosis instead of a console that flashes and vanishes.
 
 #### Reproducible builds (lock the R version *and* package versions)
 
