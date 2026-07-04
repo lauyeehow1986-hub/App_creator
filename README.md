@@ -248,6 +248,12 @@ matches your dev R.
     release) as Windows binaries — no Rtools needed, since Bioconductor
     ships binaries per release. (`BiocManager` is bootstrapped
     automatically.)
+  - **Local / source-tarball packages are handled too:** anything no
+    repo can provide (installed from a local `.tar.gz`, CRAN-archived, or
+    source-only) is copied into the bundle from the build machine *if
+    it's pure R* — pure-R code is R-version-independent, so it loads in
+    the bundled R. A *compiled* such package can't be copied safely
+    (ABI) and is reported by the missing-package check instead.
   - If a required package can't be installed, the build **warns and
     lists it** rather than shipping a bundle that crashes on the target.
   - Consequence: dependencies loaded *dynamically* (e.g.

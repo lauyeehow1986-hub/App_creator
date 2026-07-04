@@ -476,6 +476,38 @@ missing_bundle_packages <- function(lib_dir, pkgs) {
   setdiff(pkgs, installed_ok)
 }
 
+#' Copy pure-R packages the repos couldn't provide from the build machine
+#'
+#' Last-resort fallback for packages no repo can install: ones the build
+#' machine got from a **local source tarball**, or that are CRAN-archived
+#' / source-only. Since the build machine already has them installed, a
+#' pure-R package (no compiled code) can just be copied into the bundle -
+#' pure-R code is R-version-independent, so the older bundled R loads it
+#' fine (this is exactly why `install.packages(type = "win.binary")`
+#' couldn't help but a copy can). Compiled packages are skipped - copying
+#' a binary built for the build machine's R into the bundle's older R is
+#' the ABI mismatch this package works hard to avoid; those are left for
+#' the missing-package check to report.
+#' @return The names actually copied.
+#' @keywords internal
+#' @noRd
+copy_pure_r_packages <- function(lib_dir, pkgs) {
+  copied <- character(0)
+  for (p in pkgs) {
+    if (fs::dir_exists(fs::path(lib_dir, p))) next
+    src <- tryCatch(find.package(p), error = function(e) NULL)
+    if (is.null(src)) next
+    d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
+    needs_comp <- inherits(d, "packageDescription") &&
+      identical(tolower(d$NeedsCompilation %||% "no"), "yes")
+    if (needs_comp || fs::dir_exists(fs::path(src, "libs"))) next # compiled: unsafe
+    ok <- tryCatch({ fs::dir_copy(src, fs::path(lib_dir, p)); TRUE },
+                   error = function(e) FALSE)
+    if (ok) copied <- c(copied, p)
+  }
+  copied
+}
+
 #' @keywords internal
 #' @noRd
 install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
@@ -528,6 +560,13 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
     install_github_into_bundle(rscript, lib_dir, unname(gh))
   }
 
+  # Last resort for anything no repo could provide (local source tarballs,
+  # CRAN-archived / source-only packages): copy the build machine's pure-R copy.
+  copied <- copy_pure_r_packages(lib_dir, missing_bundle_packages(lib_dir, pkgs))
+  if (length(copied) > 0) {
+    cli::cli_inform("Copied {length(copied)} pure-R package{?s} the repositories couldn't provide from the build machine ({.pkg {copied}}).")
+  }
+
   # Verify every requested package actually landed. A bundle that looks built
   # but is missing a package the app calls is a silently-broken offline bundle:
   # it ships fine, then crashes on the target with "there is no package called
@@ -538,8 +577,8 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   if (length(missing) > 0) {
     cli::cli_warn(c(
       "!" = "{length(missing)} required package{?s} did NOT install into the bundle: {.pkg {missing}}",
-      "i" = "Usually GitHub-only or CRAN-archived packages with no Windows binary. The app will crash on the target with {.emph there is no package called '<name>'}.",
-      "i" = "Fix each: install it into {.path {lib_dir}} yourself (a pure-R package can just be copied in; otherwise {.code remotes::install_github()} using the bundle's own {.path R-Portable} Rscript), or drop it from the app."
+      "i" = "CRAN, Bioconductor, GitHub, and pure-R local packages are handled automatically - what's left is usually a {.emph compiled} package with no Windows binary, which would need Rtools in the bundled R. The app will otherwise crash on the target with {.emph there is no package called '<name>'}.",
+      "i" = "Fix each: put a matching Windows build into {.path {lib_dir}} yourself, or drop it from the app."
     ))
   }
   invisible()

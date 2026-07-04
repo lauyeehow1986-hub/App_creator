@@ -248,3 +248,17 @@ test_that("bioc_packages ignores CRAN/base packages", {
   expect_length(bioc_packages(character(0)), 0L)
   expect_length(bioc_packages("stats"), 0L)
 })
+
+test_that("copy_pure_r_packages copies pure-R packages and skips compiled ones", {
+  skip_if_not(nzchar(system.file(package = "R6")) &&
+              nzchar(system.file(package = "rlang")), "R6/rlang not installed")
+  lib <- fs::path_temp("shinyalcatraz-copy-pure")
+  if (fs::dir_exists(lib)) fs::dir_delete(lib)
+  fs::dir_create(lib)
+  on.exit(fs::dir_delete(lib))
+  copied <- copy_pure_r_packages(lib, c("R6", "rlang"))   # R6 pure-R, rlang compiled
+  expect_true("R6" %in% copied)
+  expect_false("rlang" %in% copied)
+  expect_true(fs::dir_exists(fs::path(lib, "R6")))
+  expect_false(fs::dir_exists(fs::path(lib, "rlang")))
+})
