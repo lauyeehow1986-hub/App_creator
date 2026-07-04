@@ -319,6 +319,24 @@ fn main() {
   invisible(project_dir)
 }
 
+#' Locate the cargo bin directory when it isn't on PATH
+#'
+#' rustup installs the toolchain into `~/.cargo/bin` but doesn't always
+#' add it to `PATH` - e.g. an `rustup-init --no-modify-path` install, or
+#' an R/RStudio session started before the profile change. Return that
+#' directory when `cargo` lives there but isn't already resolvable, so a
+#' Tauri build can still find `cargo`/`cargo-tauri`.
+#' @keywords internal
+#' @noRd
+find_cargo_bin <- function() {
+  if (nzchar(Sys.which("cargo"))) return(NULL) # already on PATH
+  home <- Sys.getenv("USERPROFILE", unset = Sys.getenv("HOME"))
+  cargo_home <- Sys.getenv("CARGO_HOME", unset = file.path(home, ".cargo"))
+  bin <- file.path(cargo_home, "bin")
+  cargo_exe <- file.path(bin, if (.Platform$OS.type == "windows") "cargo.exe" else "cargo")
+  if (file.exists(cargo_exe)) bin else NULL
+}
+
 #' Locate an available Tauri CLI on the build machine
 #' @keywords internal
 #' @noRd
@@ -336,11 +354,22 @@ find_tauri_cli <- function() {
 #' @keywords internal
 #' @noRd
 run_tauri_build <- function(project_dir) {
+  # rustup's ~/.cargo/bin isn't always on PATH; add it (for this call only) so
+  # both our CLI discovery below and the build subprocess - which shells out to
+  # `cargo` - can find the toolchain. Otherwise the npx fallback runs and then
+  # dies with "cargo: program not found".
+  cargo_bin <- find_cargo_bin()
+  if (!is.null(cargo_bin)) {
+    old_path <- Sys.getenv("PATH")
+    Sys.setenv(PATH = paste(cargo_bin, old_path, sep = .Platform$path.sep))
+    on.exit(Sys.setenv(PATH = old_path), add = TRUE)
+  }
+
   cli_spec <- find_tauri_cli()
   if (is.null(cli_spec)) {
     cli::cli_warn(c(
-      "!" = "No Tauri CLI found on the build machine (checked {.code cargo-tauri} and {.code npx}).",
-      "i" = "Project scaffolded at {.path {project_dir}} - install the Tauri CLI and run {.code cargo tauri build} there yourself."
+      "!" = "No Tauri CLI found on the build machine (checked {.code cargo-tauri} and {.code npx}, plus {.path ~/.cargo/bin}).",
+      "i" = "Install it with {.code cargo install tauri-cli} (needs a Rust toolchain), then re-run; the project is scaffolded at {.path {project_dir}}."
     ))
     return(list(built = FALSE, binary_path = NA_character_))
   }
