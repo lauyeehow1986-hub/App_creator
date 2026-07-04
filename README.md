@@ -249,13 +249,15 @@ build_portable(
 | **rJava** | a portable Temurin JRE → `runtime/jre` (`JAVA_HOME` set in `run.bat`) | ✅ verified end-to-end offline |
 | **tesseract** | OCR `*.traineddata` → `tessdata` (`TESSDATA_PREFIX` set) | ✅ verified end-to-end offline |
 | **RMariaDB** | *nothing* — the client is self-contained; point it at an existing server | ✅ works as-is |
-| **RMariaDB** `server = TRUE` | a portable MariaDB server + `db-start/stop.bat` (127.0.0.1 only) | ⚠️ opt-in, **not yet run end-to-end** — warns at build time |
+| **RMariaDB** `server = TRUE` | a portable MariaDB server + `db-start/stop.bat` (127.0.0.1 only, graceful shutdown) | ✅ verified end-to-end offline (opt-in) |
 | **rstan / brms** | *nothing* — **precompile your models at build time** (recommended) | ✅ recommended |
 | **rstan / brms** `rtools = TRUE` | Rtools toolchain → `runtime/rtools` (compile new models on target) | ⚠️ opt-in, **not yet run end-to-end** — warns at build time |
 
 The registry is `native_runtime_providers()` (run it to see the full set).
-See `docs/ARCHITECTURE.md` → "Native-runtime provisioning" for why the two
-opt-in paths are gated and marked unverified rather than shipped as done.
+Everything above is verified end-to-end offline except the opt-in Rtools
+path (`rtools = TRUE`), which is scaffolded and warns at build time until
+it's run on a clean box. See `docs/ARCHITECTURE.md` → "Native-runtime
+provisioning" for the verification detail.
 
 ---
 

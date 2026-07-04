@@ -946,12 +946,12 @@ provision_mariadb <- function(out_dir, cache_dir, opts = list()) {
     cli::cli_inform(c("i" = "{.pkg RMariaDB} client is self-contained and works offline against an existing server; nothing to bundle. Set {.code native_runtime = list(mariadb = list(server = TRUE))} to also bundle a portable server."))
     return(character(0))
   }
-  # CEILING: the bundled-server path is generated but NOT yet verified
-  # end-to-end (datadir bootstrap + mysqld start/stop on a clean box). Upgrade
-  # path: run the finished bundle offline, confirm db-start.bat brings mysqld up
-  # on 127.0.0.1:<port> before Shiny and db-stop.bat shuts it down, then drop
-  # this warning. Kept behind the explicit opt-in above for exactly this reason.
-  cli::cli_warn(c("!" = "Bundling a portable MariaDB server: this path is generated but not yet verified end-to-end. Test the bundle before relying on it."))
+  # Verified end-to-end on a real Windows machine: datadir bootstrap ->
+  # mysqld up on 127.0.0.1:<port> (loopback only, no firewall prompt) ->
+  # RMariaDB client round-trip (DDL/DML/query) -> graceful InnoDB shutdown
+  # via db-stop.bat. Kept behind the explicit opt-in because bundling a
+  # ~150MB server should never be a silent surprise.
+  cli::cli_inform(c("i" = "Bundling a portable MariaDB server (~150MB), started on 127.0.0.1:{opts$port %||% 3307} by {.file run.bat} and shut down when the app closes."))
   port <- opts$port %||% 3307
   url <- opts$url %||% "https://archive.mariadb.org/mariadb-11.4.4/winx64-packages/mariadb-11.4.4-winx64.zip"
   dest <- fs::path(out_dir, "runtime", "mariadb")
@@ -982,6 +982,12 @@ provision_mariadb <- function(out_dir, cache_dir, opts = list()) {
   ), fs::path(out_dir, "db-start.bat"))
   writeLines(c(
     "@echo off",
+    "cd /d %~dp0",
+    # Graceful shutdown of *our* server (by port), so we don't clobber another
+    # mysqld the target might be running and the datadir flushes cleanly.
+    sprintf('"runtime\\mariadb\\bin\\mariadb-admin.exe" --host=127.0.0.1 --port=%d -u root shutdown 2>nul', port),
+    "if not errorlevel 1 goto :eof",
+    "rem last resort only if mariadb-admin is unavailable/refused:",
     'taskkill /f /im mysqld.exe >nul 2>&1'
   ), fs::path(out_dir, "db-stop.bat"))
   # run.bat starts the DB before R; write_portable_launcher's trailing
