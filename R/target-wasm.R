@@ -278,7 +278,9 @@ assert_wasm_compatible <- function(app_dir) {
 
   msg <- c("x" = "{.fn build_wasm}: this app depends on packages that can't run in a WebAssembly bundle.")
   if (length(hard)) {
-    msg <- c(msg, "!" = "No webR/WebAssembly build (remove or replace): {.pkg {hard_lab}}")
+    msg <- c(msg,
+      "!" = "No webR/WebAssembly build (remove or replace): {.pkg {hard_lab}}",
+      "i" = "webR runs pre-compiled WebAssembly, not R source, so installing from a remote (as {.fn build_portable} can) won't help here. To include one of these you'd have to build a wasm binary for it - see the {.pkg rwasm} package ({.url https://github.com/r-wasm/rwasm}), which needs a wasm/Emscripten toolchain.")
   }
   if (length(fixable)) {
     msg <- c(msg,
