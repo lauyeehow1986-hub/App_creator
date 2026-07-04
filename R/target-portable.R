@@ -110,7 +110,8 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   fs::dir_create(lib_dir)
   install_packages_portable(bundle_r_dir, lib_dir, pkgs)
 
-  env_lines <- provision_native_runtimes(pkgs, out_dir, cache_dir, native_runtime)
+  r_version <- r_portable_version %||% read_r_portable_version(bundle_r_dir)
+  env_lines <- provision_native_runtimes(pkgs, out_dir, cache_dir, native_runtime, r_version)
 
   write_portable_launcher(out_dir, port = port, env_lines = env_lines)
 
@@ -850,7 +851,8 @@ native_runtime_providers <- function() {
 
 # Run every provider triggered by the bundle's package set; return the run.bat
 # lines they contribute (in registry order, so env vars are set before R starts).
-provision_native_runtimes <- function(pkgs, out_dir, cache_dir, native_runtime = list()) {
+provision_native_runtimes <- function(pkgs, out_dir, cache_dir, native_runtime = list(),
+                                       r_version = NULL) {
   providers <- native_runtime_providers()
   unknown <- setdiff(names(native_runtime), names(providers))
   if (length(unknown)) {
@@ -862,6 +864,9 @@ provision_native_runtimes <- function(pkgs, out_dir, cache_dir, native_runtime =
     hit <- intersect(p$pkgs, pkgs)
     if (!length(hit)) next
     opts <- native_runtime[[nm]] %||% list()
+    # The toolchain provider needs the bundled R version to pick the matching
+    # Rtools; hand it down unless the caller pinned it.
+    opts$r_version <- opts$r_version %||% r_version
     if (isFALSE(opts$enabled)) {
       cli::cli_inform(c("!" = "Native runtime {.val {nm}} is needed by {.pkg {hit}} but disabled ({.code native_runtime${nm}$enabled = FALSE}) - the bundle may not run offline."))
       next
@@ -1008,27 +1013,85 @@ provision_toolchain <- function(out_dir, cache_dir, opts = list()) {
       "i" = "To let the target compile {.emph new} models offline, bundle Rtools: {.code native_runtime = list(toolchain = list(rtools = TRUE))}."))
     return(character(0))
   }
-  # CEILING: generated, not verified end-to-end. Rtools is large (~500MB) and
-  # must match the bundled R's toolchain (Rtools44 for R 4.4/4.5/4.6). Upgrade
-  # path: from the finished bundle offline, compile a trivial Stan model and
-  # confirm it builds, then drop this warning.
-  cli::cli_warn(c("!" = "Bundling Rtools: this path is generated but not yet verified end-to-end. Test a compile from the bundle before relying on it."))
-  ver <- opts$rtools_version %||% "44"
+  # The Rtools version MUST match the bundled R's ABI (R 4.2 -> Rtools42, 4.5 ->
+  # Rtools45, ...); a mismatch silently produces objects R-Portable can't load.
+  # Derived from the bundled R version (threaded in as opts$r_version) unless the
+  # caller pins rtools_version explicitly.
+  ver <- opts$rtools_version %||%
+    (if (length(opts$r_version) && !is.na(opts$r_version)) rtools_version_for(opts$r_version) else NULL)
+  if (is.null(ver)) {
+    cli::cli_abort(c(
+      "!" = "Could not determine which Rtools version to bundle for {.pkg rstan}/{.pkg brms}.",
+      "i" = "Pass it explicitly: {.code native_runtime = list(toolchain = list(rtools = TRUE, rtools_version = \"45\"))}."))
+  }
+  # Verified end-to-end on Windows for Rtools45/R4.5: silent extract -> the
+  # bundled toolchain compiles an R-loadable .dll that R loads and calls, with
+  # the system toolchain removed from PATH (so the bundle is provably what built
+  # it). Kept behind the explicit opt-in because Rtools is large (~500MB
+  # download, multi-GB extracted).
+  cli::cli_inform("Bundling Rtools{ver} (~500MB download, multi-GB extracted) so the target can compile at runtime...")
   dest <- fs::path(out_dir, "runtime", "rtools")
   if (!fs::dir_exists(dest)) {
     fs::dir_create(cache_dir)
     exe <- fs::path(cache_dir, sprintf("rtools%s-installer.exe", ver))
-    url <- opts$url %||% sprintf("https://cran.r-project.org/bin/windows/Rtools/rtools%s/files/rtools%s-x86_64.exe", ver, ver)
+    # CRAN installer names carry a build number (rtools45-6768-6492.exe), so we
+    # discover the current x86_64 filename from the files/ listing rather than
+    # hardcode it.
+    url <- opts$url %||% rtools_installer_url(ver)
     if (!fs::file_exists(exe)) {
-      cli::cli_inform("Downloading Rtools{ver} (~500MB)...")
+      cli::cli_inform("Downloading {basename(url)}...")
       utils::download.file(url, exe, mode = "wb", quiet = TRUE)
     }
-    # Rtools ships as an Inno Setup installer; /VERYSILENT /DIR= extracts it to a
-    # user dir with no admin rights.
-    fs::dir_create(dest)
-    system2(exe, c("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+    # Rtools ships as an Inno Setup installer. Two non-obvious requirements,
+    # both found by running it:
+    #   * /CURRENTUSER is essential - without it the installer defaults to an
+    #     admin (all-users) install and *silently aborts with exit code 2* on a
+    #     non-admin build machine.
+    #   * the target dir must NOT pre-exist - Inno pops a "Target directory
+    #     already exists" message box that /SUPPRESSMSGBOXES does not dismiss,
+    #     hanging the silent install forever. So create only the parent and let
+    #     the installer create `dest` itself.
+    fs::dir_create(fs::path_dir(dest))
+    system2(exe, c("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER",
                    sprintf('/DIR=%s', dest)), stdout = FALSE, stderr = FALSE)
   }
   c('set "PATH=%~dp0runtime\\rtools\\usr\\bin;%~dp0runtime\\rtools\\x86_64-w64-mingw32.static.posix\\bin;%PATH%"',
     'set "BINPREF=%~dp0runtime/rtools/x86_64-w64-mingw32.static.posix/bin/"')
+}
+
+# R x.y -> Rtools "xy" (R 4.2 -> "42", 4.5 -> "45"). The Windows toolchain is
+# paired to the R minor version; bundling a mismatched one breaks compiles.
+#' @keywords internal
+#' @noRd
+rtools_version_for <- function(rver) {
+  parts <- as.integer(strsplit(as.character(rver), ".", fixed = TRUE)[[1]])
+  paste0(parts[1], parts[2])
+}
+
+# Discover the current x86_64 Rtools installer URL from CRAN's files/ listing
+# (the filename carries a build number that changes over time).
+#' @keywords internal
+#' @noRd
+rtools_installer_url <- function(ver) {
+  base <- sprintf("https://cran.r-project.org/bin/windows/Rtools/rtools%s/files/", ver)
+  listing <- tryCatch(readLines(base, warn = FALSE),
+                      error = function(e) cli::cli_abort("Could not read the Rtools{ver} listing at {.url {base}}: {conditionMessage(e)}"))
+  # x86_64 build starts with a digit after the dash; aarch64 build has "aarch64".
+  names <- unlist(regmatches(listing, regexpr(sprintf("rtools%s-[0-9][-0-9]*[.]exe", ver), listing)))
+  names <- names[!grepl("aarch64", names)]
+  if (!length(names)) cli::cli_abort("No x86_64 Rtools{ver} installer found at {.url {base}}.")
+  paste0(base, names[[1]])
+}
+
+# Read the bundled R-Portable's R version by asking its own Rscript (needed to
+# pick the matching Rtools). Cheap: --version loads no packages.
+#' @keywords internal
+#' @noRd
+read_r_portable_version <- function(bundle_r_dir) {
+  rscript <- fs::path(bundle_r_dir, "bin", "x64", "Rscript.exe")
+  if (!fs::file_exists(rscript)) return(NULL)
+  out <- tryCatch(suppressWarnings(system2(rscript, "--version", stdout = TRUE, stderr = TRUE)),
+                  error = function(e) character(0))
+  m <- unlist(regmatches(out, regexpr("[0-9]+[.][0-9]+[.][0-9]+", out)))
+  if (length(m)) m[[1]] else NULL
 }

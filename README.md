@@ -251,12 +251,12 @@ build_portable(
 | **RMariaDB** | *nothing* — the client is self-contained; point it at an existing server | ✅ works as-is |
 | **RMariaDB** `server = TRUE` | a portable MariaDB server + `db-start/stop.bat` (127.0.0.1 only, graceful shutdown) | ✅ verified end-to-end offline (opt-in) |
 | **rstan / brms** | *nothing* — **precompile your models at build time** (recommended) | ✅ recommended |
-| **rstan / brms** `rtools = TRUE` | Rtools toolchain → `runtime/rtools` (compile new models on target) | ⚠️ opt-in, **not yet run end-to-end** — warns at build time |
+| **rstan / brms** `rtools = TRUE` | Rtools toolchain → `runtime/rtools` (compile new models on target) | ✅ verified end-to-end offline (opt-in; large — ~500 MB) |
 
 The registry is `native_runtime_providers()` (run it to see the full set).
-Everything above is verified end-to-end offline except the opt-in Rtools
-path (`rtools = TRUE`), which is scaffolded and warns at build time until
-it's run on a clean box. See `docs/ARCHITECTURE.md` → "Native-runtime
+All of these are verified end-to-end offline; the two opt-in paths
+(`server = TRUE`, `rtools = TRUE`) are gated only because they're large,
+not because they're unproven. See `docs/ARCHITECTURE.md` → "Native-runtime
 provisioning" for the verification detail.
 
 ---

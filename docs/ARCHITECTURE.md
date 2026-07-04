@@ -158,7 +158,7 @@ R starts. Four classes, one mechanism:
 | Server process | `RMariaDB` | *(client only)* nothing — the win.binary bundles Connector/C, so the client already works offline against an existing server | — | verified: no staging needed |
 | Server process | `RMariaDB` (`server = TRUE`) | portable MariaDB server → `runtime/mariadb` + `db-start/stop.bat` | started/stopped by `run.bat` (127.0.0.1 only) | **verified end-to-end** (offline RMariaDB round-trip against the bundled server; graceful InnoDB shutdown) — opt-in |
 | Compiler | `rstan`/`brms` | *(preferred)* nothing — precompile models at build time | — | documented recommendation |
-| Compiler | `rstan`/`brms` (`rtools = TRUE`) | Rtools toolchain → `runtime/rtools` | `PATH` + `BINPREF` | **scaffolded, NOT yet run** — opt-in, emits a build-time warning |
+| Compiler | `rstan`/`brms` (`rtools = TRUE`) | Rtools toolchain → `runtime/rtools` | `PATH` + `BINPREF` | **verified end-to-end** (bundled toolchain compiled R-loadable C++ with the system toolchain stripped from `PATH`) — opt-in |
 
 The registry is `native_runtime_providers()` (exported for
 auditability); each provider is `function(out_dir, cache_dir, opts)` that
@@ -166,9 +166,9 @@ stages its runtime and returns the `run.bat` lines that point the app at
 it. `build_portable()` auto-selects providers from the dependency tree
 and threads per-provider options through its `native_runtime` argument.
 
-**Verification, and the one honest gap.** Three of these were run
-end-to-end (real download → stage → apply the exact env vars `run.bat`
-injects → exercise the runtime offline):
+**Verification.** All four were run end-to-end (real download → stage →
+apply the exact env vars `run.bat` injects → exercise the runtime
+offline):
 
 - **JRE**: an actual `.jinit()` on the *bundled* JVM (confirmed the
   running `java.home` == the staged path, Temurin 21).
@@ -185,16 +185,31 @@ injects → exercise the runtime offline):
   corruption; replaced with `mariadb-admin ... --port=<port> shutdown`
   scoped to our server, taskkill only as a last resort.
 
-The **Rtools** (`rtools = TRUE`) provider is the one still unverified: a
-~500 MB toolchain that must match R-Portable's ABI and that this build
-couldn't download-and-compile-through honestly. Per the project's "never
-claim unverified success" rule and convention #6 (name the corner) it's
-kept **behind an explicit opt-in**, emits a `cli::cli_warn()` at build
-time saying it hasn't been run, and its code comment names the exact
-verification step (compile a trivial Stan model from the finished bundle
-offline) that would let the warning be dropped. The default `rstan` path
-(precompile models at build time) is the *correct* answer for most apps
-anyway, so nobody hits the unverified path without asking for it.
+- **Rtools** (`rtools = TRUE`): the fixed provider downloaded Rtools45
+  (matched to R 4.5), silently installed it non-admin, and — with the
+  machine's *own* `C:\rtools45` stripped from `PATH` and `BINPREF` forced
+  to the bundled `bin/` — `Rcpp::sourceCpp()` compiled an R-loadable
+  `.dll` (STL `inner_product`) that R loaded and called. That's the exact
+  `R CMD SHLIB` path rstan/brms use to compile Stan models at runtime; a
+  full Stan model compile additionally exercises `StanHeaders`/`RcppEigen`
+  (an rstan *package* concern, not a toolchain one) and wasn't run.
+  Verifying it surfaced **four** real bugs a read-only review misses,
+  each fixed in `provision_toolchain()`: (1) the Rtools version was
+  hardcoded (`"44"`) instead of matched to the bundled R's ABI — now
+  derived via `rtools_version_for()` from the bundled R version; (2) the
+  installer URL was hardcoded to a filename that 404s — the real name
+  carries a build number (`rtools45-6768-6492.exe`), now discovered from
+  CRAN's `files/` listing; (3) the silent install aborted with exit code
+  2 on a non-admin build machine — needs `/CURRENTUSER`; (4) pre-creating
+  the target dir made Inno pop a "directory already exists" box that
+  `/SUPPRESSMSGBOXES` won't dismiss, hanging the install forever — now
+  only the parent is created.
+
+Rtools is kept **behind an explicit opt-in** (`rtools = TRUE`) purely
+because it's large (~500 MB download, multi-GB extracted): the default
+`rstan` path (precompile models at build time) is the *correct*, far
+lighter answer for most apps, so nobody pays for the toolchain without
+asking for it.
 
 ## Native shell notes (verified end-to-end for `backend = "wasm"` desktop on Linux *and* Windows; the rest is still planned)
 
@@ -283,8 +298,6 @@ anyway, so nobody hits the unverified path without asking for it.
   — `write_tauri_project()` deliberately ships `bundle.active = false`
   today; see "Native shell notes" above for why that's the right default,
   not just what got skipped.
-- End-to-end verification of the opt-in `rstan(rtools = TRUE)`
-  native-runtime provider — implemented and scaffolded (see
-  "Native-runtime provisioning" above) but not yet run on a clean box; it
-  warns loudly at build time until it is. (`RMariaDB(server = TRUE)` was
-  in this list and is now verified.)
+- (All four native-runtime providers — JVM, data files, DB server, and
+  Rtools toolchain — are now verified end-to-end; see "Native-runtime
+  provisioning" above. Nothing in that area is deferred.)

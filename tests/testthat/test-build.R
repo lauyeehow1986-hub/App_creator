@@ -353,6 +353,18 @@ test_that("provision_native_runtimes warns on an unknown native_runtime entry", 
                  "unknown")
 })
 
+test_that("rtools_version_for maps an R version to its paired Rtools version", {
+  expect_identical(rtools_version_for("4.5.1"), "45")
+  expect_identical(rtools_version_for("4.2.0"), "42")
+  expect_identical(rtools_version_for(getRversion()), rtools_version_for(as.character(getRversion())))
+})
+
+test_that("provision_toolchain aborts clearly when it can't determine the Rtools version", {
+  d <- fs::path_temp("shinyalcatraz-notc"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  # rtools = TRUE but neither rtools_version nor r_version supplied
+  expect_error(provision_toolchain(d, d, list(rtools = TRUE)), "Rtools version")
+})
+
 test_that("write_portable_launcher injects native-runtime env lines before Rscript", {
   d <- fs::path_temp("shinyalcatraz-launcher"); fs::dir_create(d); on.exit(fs::dir_delete(d))
   write_portable_launcher(d, port = 8973,
