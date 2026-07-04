@@ -222,6 +222,19 @@ check_wasm_packages <- function(app_dir, r_versions = c("4.6", "4.5", "4.4")) {
     return(invisible(empty))
   }
 
+  # Also honor r-universe: shinylive fetches an r-universe package's wasm binary
+  # from that universe's own Emscripten shelf (per its `Repository` field), so
+  # those count as available even when they aren't on repo.r-wasm.org.
+  for (repo in Filter(function(u) grepl("r-universe\\.dev", u),
+                      custom_repo_urls(intersect(direct, installed)))) {
+    for (rv in r_versions) {
+      ap <- tryCatch(suppressWarnings(rownames(utils::available.packages(
+        contriburl = sprintf("%s/bin/emscripten/contrib/%s", repo, rv)))),
+        error = function(e) NULL)
+      if (length(ap)) wasm <- union(wasm, ap)
+    }
+  }
+
   # Only flag packages that are actually installed: a scanned `pkg::` token
   # that resolves to no installed package is almost always a false match
   # (a C++ namespace, an example in a comment, ...), and aborting a build on
