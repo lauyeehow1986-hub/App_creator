@@ -89,6 +89,24 @@ If a flagged package is only *installed from GitHub* but does have a webR
 binary (common for CRAN-archived packages), reinstall it from CRAN — or
 clear its `Remote*`/`Github*` `DESCRIPTION` fields — and it'll work.
 
+**No wasm binary anywhere (e.g. a GitHub-only package)?** webR runs
+pre-compiled WebAssembly, not R source, so a wasm binary has to *exist*.
+The robust, offline-preserving way is [r-universe](https://r-universe.dev):
+it auto-builds wasm binaries for any public git package, and shinylive
+fetches + bundles them at build time (so the target still needs no
+internet). `shinyalcatraz` can generate the registry for you from your
+app's GitHub/GitLab/Bitbucket-installed dependencies:
+
+```r
+write_runiverse_registry("path/to/app", "packages.json")
+```
+
+Commit that `packages.json` to a repo named `universe` in your GitHub
+account, install the [r-universe app](https://github.com/apps/r-universe),
+then install those packages *from* your universe
+(`install.packages(..., repos = "https://<you>.r-universe.dev")`) so
+`build_wasm()` bundles their wasm binaries offline.
+
 **Run on the target**
 
 Copy `dist/wasm/` over, then either:

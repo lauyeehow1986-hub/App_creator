@@ -284,3 +284,25 @@ test_that("copy_pure_r_packages copies pure-R packages and skips compiled ones",
   expect_true(fs::dir_exists(fs::path(lib, "R6")))
   expect_false(fs::dir_exists(fs::path(lib, "rlang")))
 })
+
+test_that("remote_git_url builds source URLs for git-forge remotes", {
+  expect_identical(remote_git_url(list(RemoteType = "github", RemoteUsername = "u", RemoteRepo = "r")),
+                   "https://github.com/u/r")
+  expect_identical(remote_git_url(list(RemoteType = "gitlab", RemoteUsername = "u", RemoteRepo = "r",
+                                       RemoteHost = "gitlab.com/api/v4")),
+                   "https://gitlab.com/u/r")
+  expect_identical(remote_git_url(list(RemoteType = "bitbucket", RemoteUsername = "u", RemoteRepo = "r")),
+                   "https://bitbucket.org/u/r")
+  expect_identical(remote_git_url(list(RemoteType = "git", RemoteUrl = "https://x/y.git")),
+                   "https://x/y.git")
+  expect_null(remote_git_url(list(RemoteType = "cran")))
+})
+
+test_that("runiverse_registry is empty for an app with no remote packages", {
+  d <- fs::path_temp("shinyalcatraz-noremote")
+  if (fs::dir_exists(d)) fs::dir_delete(d)
+  fs::dir_create(d)
+  on.exit(fs::dir_delete(d))
+  writeLines("library(stats)", fs::path(d, "app.R"))
+  expect_length(runiverse_registry(d), 0L)
+})

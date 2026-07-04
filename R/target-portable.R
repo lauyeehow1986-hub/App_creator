@@ -429,6 +429,89 @@ custom_repo_urls <- function(pkgs) {
   unique(repos)
 }
 
+#' The git URL for a remote-installed package, for an r-universe registry
+#'
+#' Reconstructs the source git URL from a package's installed `DESCRIPTION`
+#' `Remote*` fields, for the git-forge types r-universe can build from
+#' (github/gitlab/bitbucket, or a generic `git` URL). `NULL` otherwise.
+#' @keywords internal
+#' @noRd
+remote_git_url <- function(d) {
+  rt <- tolower(d$RemoteType %||% "")
+  host <- switch(rt,
+    github = "github.com",
+    gitlab = sub("/api/v[0-9]+$", "", d$RemoteHost %||% "gitlab.com"),
+    bitbucket = "bitbucket.org",
+    NULL
+  )
+  user <- d$RemoteUsername
+  repo <- d$RemoteRepo
+  if (!is.null(host) && !is.null(user) && !is.null(repo) && nzchar(user) && nzchar(repo)) {
+    return(sprintf("https://%s/%s/%s", host, user, repo))
+  }
+  if (rt == "git" && !is.null(d$RemoteUrl) && nzchar(d$RemoteUrl)) return(d$RemoteUrl)
+  NULL
+}
+
+#' Build an r-universe registry (`packages.json`) from an app's remotes
+#'
+#' Scans an app for the packages it uses (via [scan_r_package_deps()],
+#' including commented-out `library()` calls, since shinylive reads those),
+#' keeps the ones the build machine installed from a git forge
+#' (GitHub/GitLab/Bitbucket/git), and returns the registry entries an
+#' r-universe needs to build them - crucially their **WebAssembly** binaries,
+#' which [build_wasm()] then bundles offline. This is the automated form of
+#' hand-writing `packages.json`.
+#'
+#' @param app_dir Directory containing the Shiny app.
+#' @return A list of `list(package=, url=, branch=?)` entries (possibly empty).
+#' @seealso [write_runiverse_registry()]
+#' @export
+runiverse_registry <- function(app_dir) {
+  direct <- scan_r_package_deps(app_dir, include_commented = TRUE)
+  installed <- rownames(utils::installed.packages())
+  entries <- list()
+  for (p in intersect(direct, installed)) {
+    d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
+    if (!inherits(d, "packageDescription")) next
+    url <- remote_git_url(d)
+    if (is.null(url)) next
+    entry <- list(package = p, url = url)
+    ref <- d$RemoteRef
+    if (!is.null(ref) && nzchar(ref) && !identical(ref, "HEAD")) entry$branch <- ref
+    entries[[length(entries) + 1L]] <- entry
+  }
+  entries
+}
+
+#' Write an r-universe registry (`packages.json`) for an app's remote packages
+#'
+#' Writes the [runiverse_registry()] entries to a `packages.json` file - the
+#' registry you commit to a repo named `universe` in your GitHub account to
+#' have r-universe build (and wasm-compile) those packages, so [build_wasm()]
+#' can bundle them offline. See the README "r-universe" setup.
+#'
+#' @param app_dir Directory containing the Shiny app.
+#' @param path Output path for the registry JSON.
+#' @return Invisibly, `path` (or an empty string if there was nothing to write).
+#' @export
+write_runiverse_registry <- function(app_dir, path = "packages.json") {
+  entries <- runiverse_registry(app_dir)
+  if (length(entries) == 0) {
+    cli::cli_inform(c(
+      "i" = "No GitHub/GitLab/Bitbucket-installed packages found in {.path {app_dir}} - nothing to add to an r-universe."
+    ))
+    return(invisible(""))
+  }
+  jsonlite::write_json(entries, path, auto_unbox = TRUE, pretty = TRUE)
+  pkgs <- vapply(entries, function(e) e$package, character(1))
+  cli::cli_inform(c(
+    "v" = "Wrote {length(entries)} package{?s} to {.path {path}}: {.pkg {pkgs}}.",
+    "i" = "Commit it as {.file packages.json} in a repo named {.val universe} in your GitHub account, then install the {.href https://github.com/apps/r-universe} app."
+  ))
+  invisible(path)
+}
+
 #' Install git/URL-remote packages into the bundle via the bundle's Rscript
 #'
 #' Runs the per-package `remotes::install_*()` expressions from
