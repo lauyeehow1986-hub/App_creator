@@ -293,7 +293,8 @@ assert_wasm_compatible <- function(app_dir) {
   if (length(hard)) {
     msg <- c(msg,
       "!" = "No webR/WebAssembly build (remove or replace): {.pkg {hard_lab}}",
-      "i" = "webR runs pre-compiled WebAssembly, not R source, so installing from a remote (as {.fn build_portable} can) won't help. To include one of these, a wasm binary has to exist: easiest is to put it on {.strong r-universe} (it auto-builds wasm binaries and shinylive fetches + bundles them from the package's {.field Repository}), or build one with {.pkg rwasm} / the {.code r-wasm/actions} GitHub Actions ({.url https://r-wasm.github.io/rwasm/}).")
+      "i" = "webR runs pre-compiled WebAssembly, not R source, so a wasm binary has to *exist*. If the package can compile to wasm but just isn't on repo.r-wasm.org (typically a GitHub-only package), put it on {.strong r-universe} - it builds the wasm binary and shinylive bundles it from the package's {.field Repository}.",
+      "i" = "But a package that's on CRAN yet still missing a wasm binary generally {.strong cannot} be compiled to wasm at all (needs a JVM, a live DB/socket, threads, ...) - r-universe uses the same toolchain and would fail identically. Replace it, or use {.fn build_portable} (real R, no wasm needed).")
   }
   if (length(fixable)) {
     msg <- c(msg,

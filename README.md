@@ -119,8 +119,19 @@ package like `ggradar` that has none, the robust, offline-preserving fix is
 to put it on your own **r-universe**: it builds the wasm binary in the cloud
 (no local Docker or Rust), and `build_wasm()` bundles it at build time so the
 target still needs no internet. **Verified end-to-end** (the exported offline
-app renders the `ggradar` chart). Everything is R/CLI except one browser
-click:
+app renders the `ggradar` chart).
+
+> **This only works for packages that *can* compile to wasm** but just aren't
+> on `repo.r-wasm.org` — typically **GitHub-only** packages. It does **not**
+> rescue a **CRAN** package that's missing a wasm binary: `repo.r-wasm.org`
+> already builds ~all of CRAN to wasm (22k+ packages, including `sf`, `terra`,
+> `V8`, `magick`), so a CRAN package that's *still* missing genuinely can't
+> cross-compile (needs a JVM, a live DB/socket, threads, …). r-universe uses
+> the same toolchain and would fail identically — for those, use
+> [`build_portable()`](#b-build_portable--bundled-portable-r-windows) (real R,
+> no wasm) or replace the package.
+
+Everything is R/CLI except one browser click:
 
 1. **Generate the registry** from your app (finds every GitHub/GitLab/
    Bitbucket-installed dependency):
