@@ -23,15 +23,27 @@ check_app_dir <- function(app_dir) {
 }
 
 #' Current git commit SHA of the working directory, if any
+#'
+#' Returns `"unknown"` (quietly) when `git` isn't installed or `path`
+#' isn't inside a git repo - a plain app folder very often isn't, and a
+#' non-zero `git` exit otherwise leaks an R warning ("... had status
+#' 128") on every build.
 #' @keywords internal
 #' @noRd
 git_sha <- function(path = ".") {
+  if (!nzchar(Sys.which("git"))) return("unknown")
   sha <- tryCatch(
-    system2("git", c("-C", shQuote(path), "rev-parse", "--short", "HEAD"),
-            stdout = TRUE, stderr = FALSE),
+    suppressWarnings(system2(
+      "git", c("-C", shQuote(path), "rev-parse", "--short", "HEAD"),
+      stdout = TRUE, stderr = FALSE
+    )),
     error = function(e) character(0)
   )
-  if (length(sha) == 0 || !nzchar(sha)) "unknown" else sha
+  # a non-zero exit (e.g. not a repo) attaches a non-NULL "status" attribute
+  if (!is.null(attr(sha, "status")) || length(sha) == 0 || !nzchar(sha[[1]])) {
+    return("unknown")
+  }
+  sha[[1]]
 }
 
 #' Total size of a directory, human-readable
