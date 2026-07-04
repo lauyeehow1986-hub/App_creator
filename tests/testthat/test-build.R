@@ -227,3 +227,14 @@ test_that("scan_r_package_deps optionally catches commented-out library() calls"
   with_comments <- scan_r_package_deps(d, include_commented = TRUE)
   expect_true(all(c("dplyr", "ggradar", "waffle") %in% with_comments))
 })
+
+test_that("missing_bundle_packages flags required packages absent from the library", {
+  lib <- fs::path_temp("shinyalcatraz-bundle-lib")
+  if (fs::dir_exists(lib)) fs::dir_delete(lib)
+  fs::dir_create(fs::path(lib, "shiny"))
+  fs::dir_create(fs::path(lib, "dplyr"))
+  on.exit(fs::dir_delete(lib))
+  # ggradar requested but not present -> reported missing; installed ones aren't
+  expect_identical(missing_bundle_packages(lib, c("shiny", "dplyr", "ggradar")), "ggradar")
+  expect_identical(missing_bundle_packages(lib, c("shiny", "dplyr")), character(0))
+})

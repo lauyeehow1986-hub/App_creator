@@ -350,6 +350,15 @@ curl_windows_ssl_args <- function() {
 #' guaranteed to have Rtools. Forcing the binary means a missing binary
 #' fails loudly and immediately instead of silently attempting (and
 #' sometimes, as above, half-succeeding into) a source build.
+#' Which required packages are missing from a bundle's library
+#' @keywords internal
+#' @noRd
+missing_bundle_packages <- function(lib_dir, pkgs) {
+  if (length(pkgs) == 0 || !fs::dir_exists(lib_dir)) return(pkgs)
+  installed_ok <- fs::path_file(fs::dir_ls(lib_dir, type = "directory"))
+  setdiff(pkgs, installed_ok)
+}
+
 #' @keywords internal
 #' @noRd
 install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
@@ -380,6 +389,21 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(install_expr)))
   if (!identical(status, 0L)) {
     cli::cli_warn("Package installation exited with status {status} - check the bundle's library before shipping it.")
+  }
+
+  # Verify every requested package actually landed. A bundle that looks built
+  # but is missing a package the app calls is a silently-broken offline bundle:
+  # it ships fine, then crashes on the target with "there is no package called
+  # '<name>'" and the console closes before anyone can read it. The usual
+  # culprit is a GitHub-only / CRAN-archived package with no Windows binary
+  # (install.packages(type = "win.binary") can't fetch it).
+  missing <- missing_bundle_packages(lib_dir, pkgs)
+  if (length(missing) > 0) {
+    cli::cli_warn(c(
+      "!" = "{length(missing)} required package{?s} did NOT install into the bundle: {.pkg {missing}}",
+      "i" = "Usually GitHub-only or CRAN-archived packages with no Windows binary. The app will crash on the target with {.emph there is no package called '<name>'}.",
+      "i" = "Fix each: install it into {.path {lib_dir}} yourself (a pure-R package can just be copied in; otherwise {.code remotes::install_github()} using the bundle's own {.path R-Portable} Rscript), or drop it from the app."
+    ))
   }
   invisible()
 }

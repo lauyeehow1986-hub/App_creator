@@ -271,6 +271,17 @@ matches your dev R.
 - **`build_portable()` errors that 7-Zip isn't found.** A standard
   `C:\Program Files\7-Zip` install is auto-detected; if yours is
   elsewhere, put `7z` on `PATH` (see B‑1).
+- **A portable bundle opens nothing / the console flashes and closes.**
+  The app is crashing on startup - almost always `there is no package
+  called '<name>'` for a **GitHub-only or CRAN-archived** package (e.g.
+  `ggradar`) that has no Windows binary, so `build_portable()` couldn't
+  install it. The build now **warns at build time** listing any package
+  that didn't land. To fix: copy a pure-R package's folder into the
+  bundle's `library/`, or `remotes::install_github()` it using the
+  bundle's own `R-Portable\bin\x64\Rscript.exe`, or drop it from the app.
+  To *see* the error yourself, run the bundle from a terminal
+  (`R-Portable\bin\x64\Rscript.exe --vanilla run_app.R`) so the window
+  stays open.
 - **`build_wasm()` fails on a package (GitHub 404, or "not wasm
   compatible").** Run `check_wasm_packages("your/app")` to list every
   incompatible dependency up front and why (no wasm build vs.
