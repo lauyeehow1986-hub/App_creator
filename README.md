@@ -397,16 +397,24 @@ matches your dev R.
 
 ### Pinning / choosing the runtime R version
 
-- `build_portable(..., r_portable_version = "4.2.0")` pins the bundled R.
-  If you omit it, it takes SourceForge's "latest" R-Portable.
-- **Why the pin matters:** R-Portable trails current R, and CRAN stops
-  refreshing a given R-series' *Windows binary* repo before it stops
-  publishing *source* releases. `build_portable()` forces
+- `build_portable(..., r_portable_version = "4.5.1")` pins the bundled R.
+  Omit it for the latest from the chosen `r_source`.
+- **Any version works, including the newest.** The default
+  `r_source = "github"` uses pre-built zips
+  ([selkamand/r-portable-windows](https://github.com/selkamand/r-portable-windows))
+  for the few versions it curates; for anything it lacks it **automatically
+  falls back** to `r_source = "cran"`, which builds a portable R by silently
+  extracting the **official** `R-<ver>-win.exe` installer (per-user, no
+  admin). So `r_portable_version = "4.6.1"` just works — **verified
+  end-to-end**: it fetched R 4.6.1, installed shiny's full tree, and the
+  bundle served (HTTP 200). The manifest records the *effective* source.
+- **Why the version matters:** `build_portable()` forces
   `type = "win.binary"` on purpose — so a package with **no binary for
   your pinned R** fails **loudly** instead of silently trying a source
-  build (which would need Rtools you may not have). If an install fails
-  for a package that clearly exists, try a newer `r_portable_version` so a
-  matching binary exists.
+  build (which would need Rtools you may not have). A *current* R (the
+  default) has the widest binary coverage on CRAN/PPM; if an install fails
+  for a package that clearly exists, a newer `r_portable_version` usually
+  fixes it.
 
 ### How dependencies are detected and installed
 

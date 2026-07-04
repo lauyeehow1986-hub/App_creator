@@ -167,11 +167,26 @@ Two sources, `r_source`:
   because the install pass and `run.bat` both invoke R with `--vanilla`,
   which skips site profiles (an external `R_LIBS_USER` still wins under
   `--vanilla`, verified).
+- **`"cran"`** - build a portable R from the **official** Windows installer
+  (`R-<ver>-win.exe` from CRAN), silently extracted with the same Inno flags
+  as Rtools (`/VERYSILENT /CURRENTUSER /DIR`, per-user, no admin; don't
+  pre-create the dir or Inno hangs on a "directory exists" prompt). Works
+  for *any* version CRAN publishes, including the very latest, so it has no
+  version ceiling at all. `github` **auto-falls back** to this for a
+  requested `r_portable_version` selkamand doesn't publish (e.g. 4.6.1), and
+  the *effective* source (post-fallback) is what lands in the manifest.
+  Minor footprint: the silent install leaves a per-user uninstall entry on
+  the build machine (standard Inno behaviour); the extracted R itself is
+  self-contained.
 - **`"sourceforge"`** - the classic PortableApps R-Portable (`.paf.exe`
   unpacked with 7-Zip). Its "latest" has been stuck at **4.2.0** for years,
-  which is the whole reason `github` is now the default: a *current* R is
-  what makes `snapshot=` reproducibility usable (PPM serves Windows
-  binaries only inside an R version's current window). Kept as a fallback.
+  which is the whole reason `github` is now the default. Kept as a fallback.
+
+**Verified end-to-end (`cran` via fallback):**
+`build_portable(r_portable_version = "4.6.1")` - which selkamand doesn't
+publish - auto-fell-back to `cran`, silently extracted the official R 4.6.1
+installer, installed shiny's full 30-package tree, and `run.vbs` served the
+app (HTTP 200) on bundled R 4.6.1 `(2026-06-24)`.
 
 **Verified end-to-end on Windows** (default `github` source): a
 `build_portable(snapshot = "2026-01-01")` of the demo app auto-resolved and

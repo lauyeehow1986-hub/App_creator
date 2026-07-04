@@ -53,14 +53,17 @@
 #' @param r_portable_version Portable R version to fetch, e.g. `"4.5.1"`.
 #'   If `NULL` (default), uses the latest release from the chosen
 #'   `r_source`. Pin it (together with `snapshot`) for a reproducible
-#'   bundle. Available versions depend on `r_source` (the `"github"`
-#'   source currently offers 4.0.3 / 4.2.3 / 4.3.0 / 4.5.1).
-#' @param r_source Where to fetch the portable R runtime from:
-#'   `"github"` (default, selkamand/r-portable-windows - recent R via
-#'   GitHub releases) or `"sourceforge"` (the classic PortableApps
-#'   R-Portable, effectively frozen at 4.2.0). `"github"` is preferred
-#'   because a newer R has a wider *current* CRAN-snapshot binary window
-#'   (see `snapshot`).
+#'   bundle. Any CRAN-published version works: the `"github"` source has a
+#'   curated few (4.0.3 / 4.2.3 / 4.3.0 / 4.5.1) and auto-falls back to the
+#'   `"cran"` source for anything else (e.g. `"4.6.1"`).
+#' @param r_source Where to fetch the portable R runtime from: `"github"`
+#'   (default, selkamand/r-portable-windows - recent R via GitHub release
+#'   zips), `"cran"` (build one from the *official* R Windows installer,
+#'   silently extracted - works for **any** version CRAN offers, including
+#'   the latest), or `"sourceforge"` (the classic PortableApps R-Portable,
+#'   frozen at 4.2.0). With `"github"`, a requested `r_portable_version`
+#'   that selkamand doesn't publish (e.g. `"4.6.1"`) auto-falls back to
+#'   `"cran"`, so you rarely need to set this by hand.
 #' @param snapshot Optional CRAN snapshot date `"YYYY-MM-DD"` for
 #'   **reproducible package versions**. When set, CRAN packages are
 #'   installed from that day's [Posit Public Package
@@ -106,7 +109,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
                             platform = c("windows", "macos", "linux"),
                             packages = NULL,
                             r_portable_version = NULL,
-                            r_source = c("github", "sourceforge"),
+                            r_source = c("github", "cran", "sourceforge"),
                             snapshot = NULL,
                             cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
                             port = 8973,
@@ -130,6 +133,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   cli::cli_inform("Detected package dependencies: {.pkg {pkgs}}")
 
   r_portable_src <- fetch_r_portable(cache_dir, version = r_portable_version, source = r_source)
+  r_source <- attr(r_portable_src, "r_source") %||% r_source   # effective (post-fallback)
 
   fs::dir_create(out_dir)
   bundle_r_dir <- fs::path(out_dir, "R-Portable")
@@ -279,20 +283,119 @@ find_7zip <- function() {
 
 #' Download and cache a portable R runtime for Windows
 #'
-#' Two sources, because the classic one is stuck in the past:
+#' Three sources:
 #'  * `"github"` (default) - selkamand/r-portable-windows GitHub releases:
 #'    plain zips of recent R (4.0.3 / 4.2.3 / 4.3.0 / 4.5.1 as of writing),
-#'    predictable URLs, no PortableApps `.paf` self-extractor. Newer R means
-#'    a wider *current* Posit PM binary window, which is what makes
-#'    `snapshot=` reproducibility actually usable.
-#'  * `"sourceforge"` - the original PortableApps R-Portable. Only really
-#'    offers 4.2.0 now (its "latest" hasn't moved), kept as a fallback.
+#'    predictable URLs, no install step. But it only publishes a few
+#'    versions, so a request for one it lacks (e.g. 4.6.1) auto-falls back
+#'    to `"cran"`.
+#'  * `"cran"` - build a portable R from the *official* R Windows installer
+#'    (`R-<ver>-win.exe`), silently extracted (Inno `/VERYSILENT /CURRENTUSER
+#'    /DIR`, per-user, no admin). Works for *any* version CRAN offers,
+#'    including the very latest - this is how 4.6.1 gets made.
+#'  * `"sourceforge"` - the original PortableApps R-Portable, effectively
+#'    frozen at 4.2.0. Kept as a fallback.
 #' @keywords internal
 #' @noRd
-fetch_r_portable <- function(cache_dir, version = NULL, source = c("github", "sourceforge")) {
+fetch_r_portable <- function(cache_dir, version = NULL, source = c("github", "cran", "sourceforge")) {
   source <- rlang::arg_match(source)
-  if (source == "github") fetch_r_portable_github(cache_dir, version)
-  else fetch_r_portable_sourceforge(cache_dir, version)
+  if (source == "github" && !is.null(version) && !version %in% github_rportable_versions()) {
+    cli::cli_inform("Portable R {version} isn't a selkamand/r-portable-windows release; building it from the official CRAN installer instead.")
+    source <- "cran"
+  }
+  path <- switch(source,
+    github = fetch_r_portable_github(cache_dir, version),
+    cran = fetch_r_portable_cran(cache_dir, version),
+    sourceforge = fetch_r_portable_sourceforge(cache_dir, version))
+  # Report the *effective* source (post-fallback) so the manifest is accurate.
+  attr(path, "r_source") <- source
+  path
+}
+
+# Versions selkamand/r-portable-windows publishes, e.g. c("4.5.1","4.3.0",...).
+# Empty on API failure (so the caller just attempts github and errors clearly).
+#' @keywords internal
+#' @noRd
+github_rportable_versions <- function() {
+  tags <- tryCatch(
+    jsonlite::fromJSON("https://api.github.com/repos/selkamand/r-portable-windows/releases?per_page=100")$tag_name,
+    error = function(e) character(0))
+  sub("^R-", "", tags)
+}
+
+# Build a portable R from the official CRAN Windows installer - any version.
+#' @keywords internal
+#' @noRd
+fetch_r_portable_cran <- function(cache_dir, version = NULL) {
+  fs::dir_create(cache_dir)
+  if (is.null(version)) version <- cran_latest_r_version()
+  cached <- fs::path(cache_dir, paste0("R-Portable-", version))
+  if (fs::dir_exists(fs::path(cached, "bin"))) {
+    cli::cli_inform("Using cached R-Portable {version} from {.path {cached}}.")
+    return(cached)
+  }
+  exe <- fs::path(cache_dir, sprintf("R-%s-win.exe", version))
+  if (!fs::file_exists(exe)) {
+    url <- cran_r_installer_url(version)
+    cli::cli_inform("Downloading the official R {version} installer from CRAN (one-time then cached)...")
+    curl_bin <- Sys.which("curl")
+    if (nzchar(curl_bin)) {
+      status <- system2(curl_bin, c(curl_windows_ssl_args(), "-sSL", "--max-time", "600", "-o", shQuote(exe), shQuote(url)))
+      if (!identical(status, 0L) || !fs::file_exists(exe)) {
+        cli::cli_abort("Download of the R {version} installer failed (curl exit status {status}).")
+      }
+    } else {
+      utils::download.file(url, exe, mode = "wb", quiet = FALSE)
+    }
+  }
+  # Silent Inno install, per-user, no admin. Same two gotchas as Rtools:
+  # /CURRENTUSER (else it aborts non-admin) and do NOT pre-create the target
+  # dir (else Inno hangs on a "directory already exists" prompt).
+  cli::cli_inform("Extracting R {version} into a portable runtime (silent, no admin)...")
+  fs::dir_create(fs::path_dir(cached))
+  system2(as.character(exe), c("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS",
+                               "/CURRENTUSER", sprintf("/DIR=%s", cached)),
+          stdout = FALSE, stderr = FALSE)
+  if (!fs::dir_exists(fs::path(cached, "bin"))) {
+    cli::cli_abort("Silent install of R {version} produced no {.path bin} directory - check the installer/flags.")
+  }
+  cached
+}
+
+# The current R version on CRAN's Windows base page (for r_source="cran" latest).
+#' @keywords internal
+#' @noRd
+cran_latest_r_version <- function() {
+  html <- tryCatch(readLines("https://cran.r-project.org/bin/windows/base/", warn = FALSE),
+                   error = function(e) cli::cli_abort("Couldn't read CRAN's R-for-Windows page: {conditionMessage(e)}. Pass {.arg r_portable_version} explicitly."))
+  m <- unlist(regmatches(html, regexpr("R-[0-9]+[.][0-9]+[.][0-9]+-win[.]exe", html)))
+  if (!length(m)) cli::cli_abort("Couldn't find the current R version on CRAN's Windows base page.")
+  sub("^R-(.*)-win[.]exe$", "\\1", m[[1]])
+}
+
+# The official installer URL for a version: current build lives at base/, older
+# ones at base/old/<ver>/. Try both.
+#' @keywords internal
+#' @noRd
+cran_r_installer_url <- function(version) {
+  cands <- c(
+    sprintf("https://cran.r-project.org/bin/windows/base/R-%s-win.exe", version),
+    sprintf("https://cran.r-project.org/bin/windows/base/old/%s/R-%s-win.exe", version, version))
+  for (u in cands) if (url_ok(u)) return(u)
+  cli::cli_abort(c("!" = "No official R {version} Windows installer found on CRAN.",
+                   "i" = "Checked {.url {cands[1]}} and the {.path old/} archive."))
+}
+
+# HEAD-check a URL for a 2xx status (curl).
+#' @keywords internal
+#' @noRd
+url_ok <- function(url) {
+  curl_bin <- Sys.which("curl")
+  if (!nzchar(curl_bin)) return(TRUE)  # can't check without curl; assume ok
+  code <- suppressWarnings(system2(curl_bin,
+    c(curl_windows_ssl_args(), "-sSL", "-o", "/dev/null", "-w", "%{http_code}", "-I", "--max-time", "30", shQuote(url)),
+    stdout = TRUE, stderr = FALSE))
+  length(code) > 0 && grepl("^2", code[[1]])
 }
 
 # selkamand/r-portable-windows: recent R as a plain zip, one dir per release.

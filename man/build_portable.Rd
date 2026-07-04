@@ -10,7 +10,7 @@ build_portable(
   platform = c("windows", "macos", "linux"),
   packages = NULL,
   r_portable_version = NULL,
-  r_source = c("github", "sourceforge"),
+  r_source = c("github", "cran", "sourceforge"),
   snapshot = NULL,
   cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
   port = 8973,
@@ -35,15 +35,18 @@ files via \code{\link[=scan_r_package_deps]{scan_r_package_deps()}}.}
 \item{r_portable_version}{Portable R version to fetch, e.g. \code{"4.5.1"}.
 If \code{NULL} (default), uses the latest release from the chosen
 \code{r_source}. Pin it (together with \code{snapshot}) for a reproducible
-bundle. Available versions depend on \code{r_source} (the \code{"github"}
-source currently offers 4.0.3 / 4.2.3 / 4.3.0 / 4.5.1).}
+bundle. Any CRAN-published version works: the \code{"github"} source has a
+curated few (4.0.3 / 4.2.3 / 4.3.0 / 4.5.1) and auto-falls back to the
+\code{"cran"} source for anything else (e.g. \code{"4.6.1"}).}
 
-\item{r_source}{Where to fetch the portable R runtime from:
-\code{"github"} (default, selkamand/r-portable-windows - recent R via
-GitHub releases) or \code{"sourceforge"} (the classic PortableApps
-R-Portable, effectively frozen at 4.2.0). \code{"github"} is preferred
-because a newer R has a wider \emph{current} CRAN-snapshot binary window
-(see \code{snapshot}).}
+\item{r_source}{Where to fetch the portable R runtime from: \code{"github"}
+(default, selkamand/r-portable-windows - recent R via GitHub release
+zips), \code{"cran"} (build one from the \emph{official} R Windows installer,
+silently extracted - works for \strong{any} version CRAN offers, including
+the latest), or \code{"sourceforge"} (the classic PortableApps R-Portable,
+frozen at 4.2.0). With \code{"github"}, a requested \code{r_portable_version}
+that selkamand doesn't publish (e.g. \code{"4.6.1"}) auto-falls back to
+\code{"cran"}, so you rarely need to set this by hand.}
 
 \item{snapshot}{Optional CRAN snapshot date \code{"YYYY-MM-DD"} for
 \strong{reproducible package versions}. When set, CRAN packages are
