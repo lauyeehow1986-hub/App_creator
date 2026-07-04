@@ -306,3 +306,14 @@ test_that("runiverse_registry is empty for an app with no remote packages", {
   writeLines("library(stats)", fs::path(d, "app.R"))
   expect_length(runiverse_registry(d), 0L)
 })
+
+test_that("runiverse_status returns an empty frame for an app with no remotes", {
+  d <- fs::path_temp("shinyalcatraz-rustatus")
+  if (fs::dir_exists(d)) fs::dir_delete(d)
+  fs::dir_create(d)
+  on.exit(fs::dir_delete(d))
+  writeLines("library(stats)", fs::path(d, "app.R"))
+  res <- runiverse_status(d)
+  expect_s3_class(res, "data.frame")
+  expect_identical(nrow(res), 0L)
+})

@@ -512,6 +512,57 @@ write_runiverse_registry <- function(app_dir, path = "packages.json") {
   invisible(path)
 }
 
+#' Check r-universe build status and/or wasm-bundle presence for an app's remotes
+#'
+#' Wraps the two verification steps of the r-universe path for [build_wasm()]:
+#' (step 4) whether each of an app's git-forge packages is being served by your
+#' r-universe yet, and (step 7) whether each one actually landed in a built wasm
+#' bundle. Pass `universe`, `bundle`, or both.
+#'
+#' @param app_dir Directory containing the Shiny app.
+#' @param universe Your r-universe URL, e.g. `"https://you.r-universe.dev"`.
+#'   When given, checks each package is available there (i.e. r-universe has
+#'   built it - the WebAssembly target is built alongside, so also confirm the
+#'   Emscripten column on your universe dashboard).
+#' @param bundle A built [build_wasm()] output directory; when given, checks
+#'   each package's `.tgz` is present under `shinylive/webr/packages/`.
+#' @return Invisibly, a data frame with `package`, `on_universe`, `in_bundle`
+#'   (`NA` where not checked).
+#' @seealso [runiverse_registry()], [write_runiverse_registry()]
+#' @export
+runiverse_status <- function(app_dir, universe = NULL, bundle = NULL) {
+  entries <- runiverse_registry(app_dir)
+  pkgs <- vapply(entries, function(e) e$package, character(1))
+  if (length(pkgs) == 0) {
+    cli::cli_inform("No GitHub/GitLab/Bitbucket-installed packages found in {.path {app_dir}}.")
+    return(invisible(data.frame(package = character(0), on_universe = logical(0),
+                                in_bundle = logical(0))))
+  }
+
+  on_universe <- rep(NA, length(pkgs))
+  if (!is.null(universe)) {
+    ap <- tryCatch(suppressWarnings(rownames(utils::available.packages(repos = universe))),
+                   error = function(e) NULL)
+    if (is.null(ap)) cli::cli_warn("Couldn't reach {.url {universe}}.") else on_universe <- pkgs %in% ap
+  }
+
+  in_bundle <- rep(NA, length(pkgs))
+  if (!is.null(bundle)) {
+    pdir <- fs::path(bundle, "shinylive", "webr", "packages")
+    in_bundle <- vapply(pkgs, function(p) {
+      dd <- fs::path(pdir, p)
+      fs::dir_exists(dd) && length(fs::dir_ls(dd, glob = "*.tgz")) > 0
+    }, logical(1))
+  }
+
+  mark <- function(x) ifelse(is.na(x), "-", ifelse(x, "yes", "NO"))
+  for (i in seq_along(pkgs)) {
+    cli::cli_inform("{.pkg {pkgs[i]}}: on universe = {mark(on_universe[i])}, in bundle = {mark(in_bundle[i])}")
+  }
+  invisible(data.frame(package = pkgs, on_universe = on_universe, in_bundle = in_bundle,
+                       stringsAsFactors = FALSE))
+}
+
 #' Install git/URL-remote packages into the bundle via the bundle's Rscript
 #'
 #' Runs the per-package `remotes::install_*()` expressions from
