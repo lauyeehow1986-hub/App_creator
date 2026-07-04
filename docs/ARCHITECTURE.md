@@ -139,6 +139,49 @@ All three are fixed in `R/target-portable.R`; a from-scratch
 `build_portable()` → `run.bat` → real Shiny app in a real browser run
 was re-verified after each fix.
 
+## Native-runtime provisioning (portable-only, `R/target-portable.R`)
+
+Some packages are only a thin R binding to a **native runtime that lives
+outside the R package**. Those are exactly the packages `build_wasm()`
+*can't* handle (a browser sandbox has no JVM, no DB socket, no local
+compiler) — which makes them a `build_portable()`-only problem, and one
+the CRAN Windows binary alone doesn't solve: the binary carries the
+compiled glue + any bundled DLLs, but not the external runtime. So the
+bundle has to **stage the runtime in at build time** (the build machine
+has internet; the target doesn't) and **wire it up in `run.bat`** before
+R starts. Four classes, one mechanism:
+
+| Class | Trigger pkg | Runtime staged into bundle | Wired via | Status |
+|---|---|---|---|---|
+| JVM | `rJava` | portable Temurin JRE → `runtime/jre` | `JAVA_HOME` + `jvm.dll` on `PATH` | **verified end-to-end** (offline `.jinit()`, JVM `java.home` == bundled path) |
+| Data files | `tesseract` | OCR `*.traineddata` → `tessdata` | `TESSDATA_PREFIX` | **verified end-to-end** (offline OCR through the staged data) |
+| Server process | `RMariaDB` | *(client only)* nothing — the win.binary bundles Connector/C, so the client already works offline against an existing server | — | verified: no staging needed |
+| Server process | `RMariaDB` (`server = TRUE`) | portable MariaDB server → `runtime/mariadb` + `db-start/stop.bat` | started/stopped by `run.bat` (127.0.0.1 only) | **scaffolded, NOT yet run** — opt-in, emits a build-time warning |
+| Compiler | `rstan`/`brms` | *(preferred)* nothing — precompile models at build time | — | documented recommendation |
+| Compiler | `rstan`/`brms` (`rtools = TRUE`) | Rtools toolchain → `runtime/rtools` | `PATH` + `BINPREF` | **scaffolded, NOT yet run** — opt-in, emits a build-time warning |
+
+The registry is `native_runtime_providers()` (exported for
+auditability); each provider is `function(out_dir, cache_dir, opts)` that
+stages its runtime and returns the `run.bat` lines that point the app at
+it. `build_portable()` auto-selects providers from the dependency tree
+and threads per-provider options through its `native_runtime` argument.
+
+**Why the split verification status is deliberate, not laziness.** The
+JRE and tessdata providers were run end-to-end (real download → stage →
+apply the exact env vars `run.bat` injects → exercise the package
+offline: an actual `.jinit()` on the bundled JVM, an actual OCR through
+`TESSDATA_PREFIX`). The MariaDB-server and Rtools providers are a
+genuinely bigger, heavier lift (a stateful `mysqld` datadir bootstrap; a
+~500 MB toolchain that must match R-Portable's ABI) that this build
+couldn't exercise honestly, so — per the project's "never claim
+unverified success" rule and convention #6 (name the corner) — they're
+kept **behind an explicit opt-in** (`server = TRUE` / `rtools = TRUE`),
+each emits a `cli::cli_warn()` at build time saying it hasn't been run,
+and the code comments name the exact verification step that would let the
+warning be dropped. The default `RMariaDB` path (client-only) and the
+default `rstan` path (precompile) are the *correct* answers for most
+apps anyway, so nobody hits the unverified paths without asking for them.
+
 ## Native shell notes (verified end-to-end for `backend = "wasm"` desktop on Linux *and* Windows; the rest is still planned)
 
 - Tauri uses the OS's built-in webview (WebView2 on Windows, WKWebView on
@@ -226,3 +269,7 @@ was re-verified after each fix.
   — `write_tauri_project()` deliberately ships `bundle.active = false`
   today; see "Native shell notes" above for why that's the right default,
   not just what got skipped.
+- End-to-end verification of the opt-in `RMariaDB(server = TRUE)` and
+  `rstan(rtools = TRUE)` native-runtime providers — implemented and
+  scaffolded (see "Native-runtime provisioning" above) but not yet run
+  on a clean box; each warns loudly at build time until it is.

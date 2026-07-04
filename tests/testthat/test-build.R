@@ -317,3 +317,49 @@ test_that("runiverse_status returns an empty frame for an app with no remotes", 
   expect_s3_class(res, "data.frame")
   expect_identical(nrow(res), 0L)
 })
+
+test_that("native_runtime_providers registers a provision fn per trigger package", {
+  p <- native_runtime_providers()
+  expect_setequal(names(p), c("java", "tesseract", "mariadb", "toolchain"))
+  expect_true("rJava" %in% p$java$pkgs)
+  expect_true("RMariaDB" %in% p$mariadb$pkgs)
+  expect_true("rstan" %in% p$toolchain$pkgs)
+  for (prov in p) expect_true(is.function(prov$provision))
+})
+
+test_that("provision_native_runtimes returns nothing when no package triggers a runtime", {
+  d <- fs::path_temp("shinyalcatraz-nortdir"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  expect_length(provision_native_runtimes(c("shiny", "ggplot2"), d, d), 0L)
+})
+
+test_that("provision_native_runtimes handles the no-download providers without touching the network", {
+  d <- fs::path_temp("shinyalcatraz-rtnodl"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  # RMariaDB client (no server opt) and rstan (no rtools opt) stage nothing and
+  # emit no run.bat lines - so this needs no network.
+  expect_length(provision_native_runtimes(c("RMariaDB", "rstan"), d, d), 0L)
+})
+
+test_that("provision_native_runtimes skips a provider disabled via native_runtime", {
+  d <- fs::path_temp("shinyalcatraz-rtdisabled"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  # java would normally download a JRE; enabled = FALSE must short-circuit it.
+  expect_length(
+    provision_native_runtimes("rJava", d, d, native_runtime = list(java = list(enabled = FALSE))),
+    0L)
+})
+
+test_that("provision_native_runtimes warns on an unknown native_runtime entry", {
+  d <- fs::path_temp("shinyalcatraz-rtunknown"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  expect_warning(provision_native_runtimes("shiny", d, d, native_runtime = list(nope = list())),
+                 "unknown")
+})
+
+test_that("write_portable_launcher injects native-runtime env lines before Rscript", {
+  d <- fs::path_temp("shinyalcatraz-launcher"); fs::dir_create(d); on.exit(fs::dir_delete(d))
+  write_portable_launcher(d, port = 8973,
+                          env_lines = 'set "TESSDATA_PREFIX=%~dp0tessdata"')
+  bat <- readLines(fs::path(d, "run.bat"))
+  env_at <- grep("TESSDATA_PREFIX", bat)
+  rscript_at <- grep("Rscript.exe", bat)
+  expect_length(env_at, 1L)
+  expect_true(env_at < rscript_at)                 # env set before R starts
+})

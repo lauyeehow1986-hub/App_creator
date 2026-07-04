@@ -60,6 +60,15 @@
 #' @param port Local port the launcher should use. Defaults to a fixed
 #'   port (8973); pass a different value if that's likely to collide
 #'   with something else on target machines.
+#' @param native_runtime Named list of per-provider options for packages
+#'   that need a *native runtime outside the R package* (a JVM for
+#'   `rJava`, OCR language data for `tesseract`, a database server for
+#'   `RMariaDB`, a C++ toolchain for `rstan`/`brms`). Providers are
+#'   auto-selected from the dependency tree; this list only tunes them,
+#'   e.g. `list(tesseract = list(langs = c("eng", "fra")), mariadb =
+#'   list(server = TRUE), toolchain = list(rtools = TRUE))`. Set a
+#'   provider's `enabled = FALSE` to skip it. See
+#'   [native_runtime_providers()] and `docs/ARCHITECTURE.md`.
 #' @param ... Reserved for future options.
 #' @return Invisibly, the build manifest (also written as
 #'   `manifest.json` inside `out_dir`).
@@ -70,6 +79,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
                             r_portable_version = NULL,
                             cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
                             port = 8973,
+                            native_runtime = list(),
                             ...) {
   check_app_dir(app_dir)
   platform <- rlang::arg_match(platform)
@@ -100,7 +110,9 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   fs::dir_create(lib_dir)
   install_packages_portable(bundle_r_dir, lib_dir, pkgs)
 
-  write_portable_launcher(out_dir, port = port)
+  env_lines <- provision_native_runtimes(pkgs, out_dir, cache_dir, native_runtime)
+
+  write_portable_launcher(out_dir, port = port, env_lines = env_lines)
 
   manifest <- write_build_manifest(out_dir, "portable", app_dir, extra = list(
     platform = platform,
@@ -774,7 +786,7 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
 #' Write the run.bat launcher for a portable bundle
 #' @keywords internal
 #' @noRd
-write_portable_launcher <- function(out_dir, port) {
+write_portable_launcher <- function(out_dir, port, env_lines = character()) {
   runner_r <- c(
     'options(shiny.launch.browser = TRUE)',
     sprintf('shiny::runApp("app", port = %d, launch.browser = TRUE, host = "127.0.0.1")', port)
@@ -786,8 +798,231 @@ write_portable_launcher <- function(out_dir, port) {
     "cd /d %~dp0",
     'set R_LIBS=%~dp0library',
     'set R_LIBS_USER=%~dp0library',
-    '"%~dp0R-Portable\\bin\\x64\\Rscript.exe" --vanilla run_app.R'
+    # Native-runtime env vars (JAVA_HOME, TESSDATA_PREFIX, ...) go here, before R
+    # starts, so the app's packages find their bundled runtime.
+    env_lines,
+    '"%~dp0R-Portable\\bin\\x64\\Rscript.exe" --vanilla run_app.R',
+    # Rscript blocks until the app closes; clean up any bundled server after.
+    'if exist "%~dp0db-stop.bat" call "%~dp0db-stop.bat"'
   )
   writeLines(bat, fs::path(out_dir, "run.bat"))
   invisible(out_dir)
+}
+
+# --- Native-runtime provisioning ---------------------------------------------
+#
+# Some R packages are only a thin binding to a *native runtime that lives
+# outside the R package itself* - the very thing that makes them impossible in
+# wasm (see build_wasm) is what makes them a portable-only problem here. The
+# CRAN Windows binary carries the compiled glue + any bundled DLLs, but not that
+# external runtime, so an offline bundle has to stage it in and wire it up in
+# run.bat. Four classes, one mechanism:
+#
+#   class            example      external runtime            wired via
+#   ---------------  -----------  --------------------------  ----------------
+#   JVM              rJava        a portable JRE              JAVA_HOME + PATH
+#   data files       tesseract    OCR language .traineddata   TESSDATA_PREFIX
+#   server process   RMariaDB     a running DB server         start/stop in .bat
+#   compiler         rstan/brms   a C++ toolchain (Rtools)    PATH + BINPREF
+#
+# A provider is `function(out_dir, cache_dir, opts)` that stages its runtime
+# into `out_dir` (downloading at build time - the build machine has internet,
+# the target doesn't) and returns the run.bat lines that point the app at it.
+
+#' Native-runtime providers for [build_portable()]
+#'
+#' The registry mapping trigger packages to the provider that stages their
+#' external native runtime into a portable bundle. Exported so the set is
+#' discoverable/auditable; you don't normally call these directly - pass
+#' `native_runtime = ...` to [build_portable()] instead.
+#'
+#' @return Named list of providers, each `list(pkgs = <character>, provision
+#'   = <function(out_dir, cache_dir, opts)>)`.
+#' @export
+native_runtime_providers <- function() {
+  list(
+    java      = list(pkgs = "rJava",                        provision = provision_jre),
+    tesseract = list(pkgs = "tesseract",                    provision = provision_tessdata),
+    mariadb   = list(pkgs = c("RMariaDB", "RMySQL"),        provision = provision_mariadb),
+    toolchain = list(pkgs = c("rstan", "brms", "cmdstanr"), provision = provision_toolchain)
+  )
+}
+
+# Run every provider triggered by the bundle's package set; return the run.bat
+# lines they contribute (in registry order, so env vars are set before R starts).
+provision_native_runtimes <- function(pkgs, out_dir, cache_dir, native_runtime = list()) {
+  providers <- native_runtime_providers()
+  unknown <- setdiff(names(native_runtime), names(providers))
+  if (length(unknown)) {
+    cli::cli_warn("Ignoring unknown {.arg native_runtime} entr{cli::qty(unknown)}{?y/ies}: {.val {unknown}} (known: {.val {names(providers)}}).")
+  }
+  lines <- character(0)
+  for (nm in names(providers)) {
+    p <- providers[[nm]]
+    hit <- intersect(p$pkgs, pkgs)
+    if (!length(hit)) next
+    opts <- native_runtime[[nm]] %||% list()
+    if (isFALSE(opts$enabled)) {
+      cli::cli_inform(c("!" = "Native runtime {.val {nm}} is needed by {.pkg {hit}} but disabled ({.code native_runtime${nm}$enabled = FALSE}) - the bundle may not run offline."))
+      next
+    }
+    cli::cli_inform("Provisioning native runtime {.val {nm}} (for {.pkg {hit}})...")
+    lines <- c(lines, p$provision(out_dir, cache_dir, opts))
+  }
+  lines
+}
+
+# Unzip with utils::unzip, falling back to 7-Zip (utils::unzip chokes on some
+# large/awkward archives; 7-Zip - already required for R-Portable - handles them).
+unzip_archive <- function(zip, exdir) {
+  fs::dir_create(exdir)
+  ok <- tryCatch({ utils::unzip(zip, exdir = exdir); TRUE },
+                 warning = function(w) FALSE, error = function(e) FALSE)
+  if (!ok || length(fs::dir_ls(exdir)) == 0) {
+    z <- find_7zip()
+    system2(z, c("x", "-y", sprintf("-o%s", exdir), zip), stdout = FALSE, stderr = FALSE)
+  }
+  invisible(exdir)
+}
+
+#' @keywords internal
+#' @noRd
+provision_jre <- function(out_dir, cache_dir, opts = list()) {
+  ver <- opts$version %||% "21"
+  dest <- fs::path(out_dir, "runtime", "jre")
+  if (!fs::dir_exists(dest)) {
+    # Temurin (Eclipse Adoptium) JRE: GPLv2 + Classpath Exception, freely
+    # redistributable. The API URL 302-redirects to the current build's zip.
+    url <- sprintf(
+      "https://api.adoptium.net/v3/binary/latest/%s/ga/windows/x64/jre/hotspot/normal/eclipse",
+      ver)
+    fs::dir_create(cache_dir)
+    zip <- fs::path(cache_dir, sprintf("temurin-jre-%s-win-x64.zip", ver))
+    if (!fs::file_exists(zip)) {
+      cli::cli_inform("Downloading Temurin JRE {ver} (Windows x64, ~45MB)...")
+      utils::download.file(url, zip, mode = "wb", quiet = TRUE)
+    }
+    tmp <- fs::path(cache_dir, sprintf("jre-%s-unz", ver))
+    if (fs::dir_exists(tmp)) fs::dir_delete(tmp)
+    unzip_archive(zip, tmp)
+    # The zip has one top-level jdk-<ver>-jre/ dir; flatten it into runtime/jre.
+    top <- fs::dir_ls(tmp, type = "directory")
+    fs::dir_create(fs::path_dir(dest))
+    fs::dir_copy(top[[1]], dest)
+    fs::dir_delete(tmp)
+  }
+  # jvm.dll lives in bin\server for a JRE; rJava finds it via JAVA_HOME + PATH.
+  c('set "JAVA_HOME=%~dp0runtime\\jre"',
+    'set "PATH=%JAVA_HOME%\\bin;%JAVA_HOME%\\bin\\server;%PATH%"')
+}
+
+#' @keywords internal
+#' @noRd
+provision_tessdata <- function(out_dir, cache_dir, opts = list()) {
+  langs <- opts$langs %||% "eng"
+  dest <- fs::path(out_dir, "tessdata")
+  fs::dir_create(dest)
+  for (lang in langs) {
+    f <- fs::path(dest, paste0(lang, ".traineddata"))
+    if (fs::file_exists(f)) next
+    # tessdata_fast is the smaller LSTM model set; good enough for most apps.
+    url <- sprintf("https://github.com/tesseract-ocr/tessdata_fast/raw/main/%s.traineddata", lang)
+    cli::cli_inform("Downloading tesseract training data {.val {lang}} (~15MB)...")
+    utils::download.file(url, f, mode = "wb", quiet = TRUE)
+  }
+  # libtesseract reads TESSDATA_PREFIX; point it at the folder holding the data.
+  'set "TESSDATA_PREFIX=%~dp0tessdata"'
+}
+
+#' @keywords internal
+#' @noRd
+provision_mariadb <- function(out_dir, cache_dir, opts = list()) {
+  if (!isTRUE(opts$server)) {
+    # The CRAN Windows binary of RMariaDB statically bundles the MariaDB
+    # Connector/C, so the *client* already works fully offline. What it needs is
+    # a reachable server - by default assume an existing/remote one, stage
+    # nothing. Opt into a bundled server with native_runtime = list(mariadb =
+    # list(server = TRUE)).
+    cli::cli_inform(c("i" = "{.pkg RMariaDB} client is self-contained and works offline against an existing server; nothing to bundle. Set {.code native_runtime = list(mariadb = list(server = TRUE))} to also bundle a portable server."))
+    return(character(0))
+  }
+  # CEILING: the bundled-server path is generated but NOT yet verified
+  # end-to-end (datadir bootstrap + mysqld start/stop on a clean box). Upgrade
+  # path: run the finished bundle offline, confirm db-start.bat brings mysqld up
+  # on 127.0.0.1:<port> before Shiny and db-stop.bat shuts it down, then drop
+  # this warning. Kept behind the explicit opt-in above for exactly this reason.
+  cli::cli_warn(c("!" = "Bundling a portable MariaDB server: this path is generated but not yet verified end-to-end. Test the bundle before relying on it."))
+  port <- opts$port %||% 3307
+  url <- opts$url %||% "https://archive.mariadb.org/mariadb-11.4.4/winx64-packages/mariadb-11.4.4-winx64.zip"
+  dest <- fs::path(out_dir, "runtime", "mariadb")
+  if (!fs::dir_exists(dest)) {
+    fs::dir_create(cache_dir)
+    zip <- fs::path(cache_dir, "mariadb-winx64.zip")
+    if (!fs::file_exists(zip)) {
+      cli::cli_inform("Downloading portable MariaDB server (~150MB)...")
+      utils::download.file(url, zip, mode = "wb", quiet = TRUE)
+    }
+    tmp <- fs::path(cache_dir, "mariadb-unz")
+    if (fs::dir_exists(tmp)) fs::dir_delete(tmp)
+    unzip_archive(zip, tmp)
+    top <- fs::dir_ls(tmp, type = "directory")
+    fs::dir_create(fs::path_dir(dest))
+    fs::dir_copy(top[[1]], dest)
+    fs::dir_delete(tmp)
+  }
+  # Init datadir + start/stop scripts. --skip-grant-tables = zero-auth local DB;
+  # bound to 127.0.0.1 only (no firewall prompt, no network exposure).
+  writeLines(c(
+    "@echo off",
+    "cd /d %~dp0",
+    'if not exist "data\\mysql" (',
+    '  "runtime\\mariadb\\bin\\mariadb-install-db.exe" --datadir="%~dp0data"',
+    ')',
+    sprintf('start "" /b "runtime\\mariadb\\bin\\mysqld.exe" --datadir="%%~dp0data" --port=%d --bind-address=127.0.0.1 --skip-grant-tables', port)
+  ), fs::path(out_dir, "db-start.bat"))
+  writeLines(c(
+    "@echo off",
+    'taskkill /f /im mysqld.exe >nul 2>&1'
+  ), fs::path(out_dir, "db-stop.bat"))
+  # run.bat starts the DB before R; write_portable_launcher's trailing
+  # `if exist db-stop.bat` stops it after the app closes.
+  c('call "%~dp0db-start.bat"',
+    sprintf('rem MariaDB on 127.0.0.1:%d - app connects via RMariaDB (skip-grant-tables, no password)', port))
+}
+
+#' @keywords internal
+#' @noRd
+provision_toolchain <- function(out_dir, cache_dir, opts = list()) {
+  if (!isTRUE(opts$rtools)) {
+    # rstan/brms *generate and compile C++ at runtime*, so a fixed-model app is
+    # far better served by precompiling on the build machine (no toolchain on
+    # target). Only bundle Rtools if end-users author new models at runtime.
+    cli::cli_inform(c(
+      "i" = "{.pkg rstan}/{.pkg brms} compile C++ at runtime. Preferred: precompile your models at build time (compile once here, ship the objects - no toolchain on target). See {.file docs/ARCHITECTURE.md}.",
+      "i" = "To let the target compile {.emph new} models offline, bundle Rtools: {.code native_runtime = list(toolchain = list(rtools = TRUE))}."))
+    return(character(0))
+  }
+  # CEILING: generated, not verified end-to-end. Rtools is large (~500MB) and
+  # must match the bundled R's toolchain (Rtools44 for R 4.4/4.5/4.6). Upgrade
+  # path: from the finished bundle offline, compile a trivial Stan model and
+  # confirm it builds, then drop this warning.
+  cli::cli_warn(c("!" = "Bundling Rtools: this path is generated but not yet verified end-to-end. Test a compile from the bundle before relying on it."))
+  ver <- opts$rtools_version %||% "44"
+  dest <- fs::path(out_dir, "runtime", "rtools")
+  if (!fs::dir_exists(dest)) {
+    fs::dir_create(cache_dir)
+    exe <- fs::path(cache_dir, sprintf("rtools%s-installer.exe", ver))
+    url <- opts$url %||% sprintf("https://cran.r-project.org/bin/windows/Rtools/rtools%s/files/rtools%s-x86_64.exe", ver, ver)
+    if (!fs::file_exists(exe)) {
+      cli::cli_inform("Downloading Rtools{ver} (~500MB)...")
+      utils::download.file(url, exe, mode = "wb", quiet = TRUE)
+    }
+    # Rtools ships as an Inno Setup installer; /VERYSILENT /DIR= extracts it to a
+    # user dir with no admin rights.
+    fs::dir_create(dest)
+    system2(exe, c("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                   sprintf('/DIR=%s', dest)), stdout = FALSE, stderr = FALSE)
+  }
+  c('set "PATH=%~dp0runtime\\rtools\\usr\\bin;%~dp0runtime\\rtools\\x86_64-w64-mingw32.static.posix\\bin;%PATH%"',
+    'set "BINPREF=%~dp0runtime/rtools/x86_64-w64-mingw32.static.posix/bin/"')
 }

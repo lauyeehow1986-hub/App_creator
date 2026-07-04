@@ -12,6 +12,7 @@ build_portable(
   r_portable_version = NULL,
   cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
   port = 8973,
+  native_runtime = list(),
   ...
 )
 }
@@ -40,6 +41,15 @@ in across calls. Defaults to a per-user cache dir (see
 \item{port}{Local port the launcher should use. Defaults to a fixed
 port (8973); pass a different value if that's likely to collide
 with something else on target machines.}
+
+\item{native_runtime}{Named list of per-provider options for packages
+that need a \emph{native runtime outside the R package} (a JVM for
+\code{rJava}, OCR language data for \code{tesseract}, a database server for
+\code{RMariaDB}, a C++ toolchain for \code{rstan}/\code{brms}). Providers are
+auto-selected from the dependency tree; this list only tunes them,
+e.g. \code{list(tesseract = list(langs = c("eng", "fra")), mariadb = list(server = TRUE), toolchain = list(rtools = TRUE))}. Set a
+provider's \code{enabled = FALSE} to skip it. See
+\code{\link[=native_runtime_providers]{native_runtime_providers()}} and \code{docs/ARCHITECTURE.md}.}
 
 \item{...}{Reserved for future options.}
 }

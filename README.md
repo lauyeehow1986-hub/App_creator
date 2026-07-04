@@ -224,6 +224,39 @@ Copy `dist/portable/` over and double-click **`run.bat`**. It launches the
 app from the bundled `R-Portable\` against the private `library\` — no R
 install, no admin.
 
+#### Packages that need a native runtime (rJava, tesseract, RMariaDB, rstan)
+
+Some packages are only a thin binding to a **native runtime that lives
+outside the R package** — the exact packages `build_wasm()` can't handle
+(a browser has no JVM, no DB, no compiler). The CRAN Windows binary gives
+you the compiled glue, but not that runtime, so `build_portable()` stages
+it into the bundle and wires it into `run.bat`. Providers are
+auto-selected from your dependency tree; tune them with `native_runtime`:
+
+```r
+build_portable(
+  my_app, platform = "windows",
+  native_runtime = list(
+    tesseract = list(langs = c("eng", "fra")),  # extra OCR languages
+    mariadb   = list(server = TRUE),            # bundle a portable DB server
+    toolchain = list(rtools  = TRUE)            # bundle Rtools (compile at runtime)
+  )
+)
+```
+
+| Package | What gets bundled | Status |
+|---|---|---|
+| **rJava** | a portable Temurin JRE → `runtime/jre` (`JAVA_HOME` set in `run.bat`) | ✅ verified end-to-end offline |
+| **tesseract** | OCR `*.traineddata` → `tessdata` (`TESSDATA_PREFIX` set) | ✅ verified end-to-end offline |
+| **RMariaDB** | *nothing* — the client is self-contained; point it at an existing server | ✅ works as-is |
+| **RMariaDB** `server = TRUE` | a portable MariaDB server + `db-start/stop.bat` (127.0.0.1 only) | ⚠️ opt-in, **not yet run end-to-end** — warns at build time |
+| **rstan / brms** | *nothing* — **precompile your models at build time** (recommended) | ✅ recommended |
+| **rstan / brms** `rtools = TRUE` | Rtools toolchain → `runtime/rtools` (compile new models on target) | ⚠️ opt-in, **not yet run end-to-end** — warns at build time |
+
+The registry is `native_runtime_providers()` (run it to see the full set).
+See `docs/ARCHITECTURE.md` → "Native-runtime provisioning" for why the two
+opt-in paths are gated and marked unverified rather than shipped as done.
+
 ---
 
 ### C. `build_tauri()` — native double-click desktop app
