@@ -236,6 +236,14 @@ matches your dev R.
   `library()`, `require()`, and `pkg::fn` calls, resolves the full
   transitive tree, and installs it (as Windows binaries) into a private
   `library\` inside the bundle. It deliberately does **not** use `renv`.
+  - **GitHub packages are handled too:** any dependency you installed
+    from GitHub (e.g. `remotes::install_github("ricardo-bion/ggradar")`)
+    is reinstalled into the bundle via `remotes::install_github()`, run
+    by the bundle's *own* R so the ABI matches. Pure-R GitHub packages
+    just work; a *compiled* GitHub package still needs Rtools in the
+    bundled R. (`remotes` is bootstrapped into the bundle automatically.)
+  - If a required package can't be installed, the build **warns and
+    lists it** rather than shipping a bundle that crashes on the target.
   - Consequence: dependencies loaded *dynamically* (e.g.
     `library(pkg, character.only = TRUE)` with a computed name, or
     `requireNamespace()` behind a variable) won't be detected — name such

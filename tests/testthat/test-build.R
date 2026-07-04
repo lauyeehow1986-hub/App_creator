@@ -238,3 +238,8 @@ test_that("missing_bundle_packages flags required packages absent from the libra
   expect_identical(missing_bundle_packages(lib, c("shiny", "dplyr", "ggradar")), "ggradar")
   expect_identical(missing_bundle_packages(lib, c("shiny", "dplyr")), character(0))
 })
+
+test_that("github_specs ignores CRAN/base packages", {
+  expect_length(github_specs(character(0)), 0L)
+  expect_length(github_specs("stats"), 0L)
+})

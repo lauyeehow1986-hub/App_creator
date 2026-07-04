@@ -67,8 +67,13 @@ repeat builds don't re-download it.
 \item Dependencies are installed into a private library inside the
 bundle using the \emph{bundled} Rscript.exe (not the build machine's
 R), so the installed binaries match the shipped R version/ABI.
-The build machine needs internet for this step; the resulting
-bundle does not.
+CRAN packages install as Windows binaries; any dependency the
+build machine got from GitHub is reinstalled via
+\code{remotes::install_github()} (also run by the bundled R). After
+install, the bundle library is checked and any package that failed
+to install is reported, rather than silently shipping a bundle
+that crashes on the target. The build machine needs internet for
+this step; the resulting bundle does not.
 \item A \code{run.bat} launcher sets \code{R_LIBS} to the bundle's private
 library (never the host's), then calls the bundled Rscript.exe
 to run \code{shiny::runApp(launch.browser = TRUE)}.

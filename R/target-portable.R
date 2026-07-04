@@ -18,8 +18,13 @@
 #' 3. Dependencies are installed into a private library inside the
 #'    bundle using the *bundled* Rscript.exe (not the build machine's
 #'    R), so the installed binaries match the shipped R version/ABI.
-#'    The build machine needs internet for this step; the resulting
-#'    bundle does not.
+#'    CRAN packages install as Windows binaries; any dependency the
+#'    build machine got from GitHub is reinstalled via
+#'    `remotes::install_github()` (also run by the bundled R). After
+#'    install, the bundle library is checked and any package that failed
+#'    to install is reported, rather than silently shipping a bundle
+#'    that crashes on the target. The build machine needs internet for
+#'    this step; the resulting bundle does not.
 #' 4. A `run.bat` launcher sets `R_LIBS` to the bundle's private
 #'    library (never the host's), then calls the bundled Rscript.exe
 #'    to run `shiny::runApp(launch.browser = TRUE)`.
@@ -350,6 +355,68 @@ curl_windows_ssl_args <- function() {
 #' guaranteed to have Rtools. Forcing the binary means a missing binary
 #' fails loudly and immediately instead of silently attempting (and
 #' sometimes, as above, half-succeeding into) a source build.
+#' GitHub install specs for any of `pkgs` the build machine got from GitHub
+#'
+#' Returns a named character vector (names = package, values =
+#' `"user/repo"` or `"user/repo@ref"`) for packages whose *installed*
+#' `DESCRIPTION` records a GitHub remote. CRAN's `install.packages()`
+#' can't fetch these, so `build_portable()` routes them through
+#' `remotes::install_github()` instead.
+#' @keywords internal
+#' @noRd
+github_specs <- function(pkgs) {
+  out <- character(0)
+  for (p in pkgs) {
+    d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
+    rt <- if (inherits(d, "packageDescription")) d$RemoteType else NULL
+    if (is.null(rt) || !grepl("github", rt, ignore.case = TRUE)) next
+    user <- d$RemoteUsername
+    repo <- d$RemoteRepo
+    if (is.null(user) || is.null(repo) || !nzchar(user) || !nzchar(repo)) next
+    spec <- paste0(user, "/", repo)
+    ref <- d$RemoteRef
+    if (!is.null(ref) && nzchar(ref) && !identical(ref, "HEAD")) {
+      spec <- paste0(spec, "@", ref)
+    }
+    out[[p]] <- spec
+  }
+  out
+}
+
+#' Install GitHub packages into the bundle via the bundle's own Rscript
+#'
+#' Runs `remotes::install_github()` with the *bundled* R so the result
+#' matches R-Portable's version/ABI (the same reason CRAN installs use
+#' the bundled Rscript). `remotes` is bootstrapped into the bundle by
+#' copying the build machine's copy - it's pure R (no compiled code), so
+#' it loads fine under the older R - falling back to a binary install.
+#' The bundle library is put on `.libPaths()` so already-installed CRAN
+#' dependencies are reused rather than refetched. A GitHub package with
+#' *compiled* code will still fail here without Rtools in the bundled R;
+#' that surfaces in the post-install missing-package check.
+#' @keywords internal
+#' @noRd
+install_github_into_bundle <- function(rscript, lib_dir, specs) {
+  if (!fs::dir_exists(fs::path(lib_dir, "remotes"))) {
+    bm <- tryCatch(find.package("remotes"), error = function(e) NULL)
+    if (!is.null(bm)) tryCatch(fs::dir_copy(bm, fs::path(lib_dir, "remotes")),
+                               error = function(e) NULL)
+  }
+  lib <- gsub("\\\\", "/", as.character(fs::path_abs(lib_dir)))
+  expr <- sprintf(paste0(
+    '.libPaths(c("%s", .libPaths())); options(download.file.method = "wininet"); ',
+    'if (!requireNamespace("remotes", quietly = TRUE)) ',
+    'install.packages("remotes", lib = "%s", repos = "https://cloud.r-project.org", type = "win.binary"); ',
+    'remotes::install_github(c(%s), lib = "%s", upgrade = "never")'),
+    lib, lib, paste(sprintf('"%s"', specs), collapse = ", "), lib
+  )
+  status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(expr)))
+  if (!identical(status, 0L)) {
+    cli::cli_warn("GitHub package install exited with status {status} - see output above.")
+  }
+  invisible()
+}
+
 #' Which required packages are missing from a bundle's library
 #' @keywords internal
 #' @noRd
@@ -366,17 +433,16 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   rscript <- fs::path(r_portable_dir, "bin", "x64", "Rscript.exe")
   if (!fs::file_exists(rscript)) rscript <- fs::path(r_portable_dir, "bin", "Rscript.exe")
 
-  install_expr <- sprintf(
-    'options(download.file.method = "wininet"); install.packages(c(%s), lib = %s, repos = "https://cloud.r-project.org", type = "win.binary")',
-    paste(sprintf('"%s"', pkgs), collapse = ", "),
-    sprintf('"%s"', gsub("\\\\", "/", as.character(lib_dir)))
-  )
-  cli::cli_inform("Installing {length(pkgs)} package{?s} into the bundle's private library...")
-  # system2()'s own `env` argument is unreliable on Windows (verified: it
-  # makes even a trivial `system2("cmd", ..., env = "FOO=bar")` fail with
-  # status 5) - Sys.setenv()/Sys.unsetenv() around the call, relying on
-  # ordinary child-process environment inheritance, is the version that
-  # actually works.
+  # Packages the build machine installed from GitHub can't be fetched by CRAN's
+  # install.packages(); route those through remotes::install_github() instead.
+  gh <- github_specs(pkgs)
+  cran_pkgs <- setdiff(pkgs, names(gh))
+
+  # system2()'s own `env` argument is unreliable on Windows (verified: it makes
+  # even a trivial system2("cmd", ..., env = "FOO=bar") fail with status 5) -
+  # clear R_LIBS* via Sys.setenv() and rely on ordinary child-process
+  # environment inheritance instead, so the bundled R doesn't pick up the build
+  # machine's (ABI-incompatible) user library.
   isolate_vars <- c("R_LIBS_USER", "R_LIBS_SITE", "R_LIBS")
   old_vals <- Sys.getenv(isolate_vars, unset = NA, names = TRUE)
   Sys.setenv(R_LIBS_USER = "", R_LIBS_SITE = "", R_LIBS = "")
@@ -386,9 +452,22 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
     Sys.unsetenv(names(old_vals)[is.na(old_vals)])
   }, add = TRUE)
 
-  status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(install_expr)))
-  if (!identical(status, 0L)) {
-    cli::cli_warn("Package installation exited with status {status} - check the bundle's library before shipping it.")
+  if (length(cran_pkgs) > 0) {
+    cli::cli_inform("Installing {length(cran_pkgs)} CRAN package{?s} into the bundle's private library...")
+    install_expr <- sprintf(
+      'options(download.file.method = "wininet"); install.packages(c(%s), lib = %s, repos = "https://cloud.r-project.org", type = "win.binary")',
+      paste(sprintf('"%s"', cran_pkgs), collapse = ", "),
+      sprintf('"%s"', gsub("\\\\", "/", as.character(lib_dir)))
+    )
+    status <- system2(as.character(rscript), c("--vanilla", "-e", shQuote(install_expr)))
+    if (!identical(status, 0L)) {
+      cli::cli_warn("CRAN package installation exited with status {status} - check the bundle's library before shipping it.")
+    }
+  }
+
+  if (length(gh) > 0) {
+    cli::cli_inform("Installing {length(gh)} GitHub package{?s} into the bundle ({.pkg {names(gh)}}) via {.code remotes::install_github()}...")
+    install_github_into_bundle(rscript, lib_dir, unname(gh))
   }
 
   # Verify every requested package actually landed. A bundle that looks built
