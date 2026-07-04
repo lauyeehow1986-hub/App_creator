@@ -16,7 +16,8 @@ Invisibly, \code{path} (or an empty string if there was nothing to write).
 }
 \description{
 Writes the \code{\link[=runiverse_registry]{runiverse_registry()}} entries to a \code{packages.json} file - the
-registry you commit to a repo named \code{universe} in your GitHub account to
-have r-universe build (and wasm-compile) those packages, so \code{\link[=build_wasm]{build_wasm()}}
-can bundle them offline. See the README "r-universe" setup.
+registry you commit to a repo named \verb{<your-username>.r-universe.dev} in
+your GitHub account to have r-universe build (and wasm-compile) those
+packages, so \code{\link[=build_wasm]{build_wasm()}} can bundle them offline. See the README
+"r-universe" setup.
 }

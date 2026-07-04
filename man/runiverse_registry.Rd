@@ -15,11 +15,26 @@ A list of \verb{list(package=, url=, branch=?)} entries (possibly empty).
 \description{
 Scans an app for the packages it uses (via \code{\link[=scan_r_package_deps]{scan_r_package_deps()}},
 including commented-out \code{library()} calls, since shinylive reads those),
-keeps the ones the build machine installed from a git forge
-(GitHub/GitLab/Bitbucket/git), and returns the registry entries an
-r-universe needs to build them - crucially their \strong{WebAssembly} binaries,
-which \code{\link[=build_wasm]{build_wasm()}} then bundles offline. This is the automated form of
-hand-writing \code{packages.json}.
+keeps the ones that \strong{aren't on CRAN or Bioconductor} (those get
+WebAssembly binaries automatically from \code{repo.r-wasm.org} /
+\code{bioc.r-universe.dev}), and returns the registry entries an r-universe
+needs to build the rest. This is the automated form of hand-writing
+\code{packages.json}.
+}
+\details{
+A package's source git URL is resolved from whatever metadata the install
+left behind, generalising past a single install method:
+\itemize{
+\item \code{RemoteType} github/gitlab/bitbucket/git (remotes/pak), or the legacy
+\code{GithubUsername}/\code{GithubRepo} fields (old devtools);
+\item failing that, if it was installed \emph{from} an r-universe
+(\verb{Repository: https://<u>.r-universe.dev}), the URL is recovered from
+that universe's API - so a package already on your universe is
+re-detected instead of silently dropped on the next regeneration.
+}
+
+Anything non-CRAN it still can't resolve a URL for is listed in a warning
+(add it to \code{packages.json} by hand), never dropped without notice.
 }
 \seealso{
 \code{\link[=write_runiverse_registry]{write_runiverse_registry()}}

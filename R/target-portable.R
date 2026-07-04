@@ -672,8 +672,11 @@ remote_git_url <- function(d) {
     bitbucket = "bitbucket.org",
     NULL
   )
-  user <- d$RemoteUsername
-  repo <- d$RemoteRepo
+  # Fall back to the legacy devtools fields (GithubUsername/GithubRepo), which
+  # older installs record *without* a RemoteType.
+  user <- d$RemoteUsername %||% d$GithubUsername
+  repo <- d$RemoteRepo %||% d$GithubRepo
+  if (is.null(host) && !is.null(d$GithubRepo)) host <- "github.com"
   if (!is.null(host) && !is.null(user) && !is.null(repo) && nzchar(user) && nzchar(repo)) {
     return(sprintf("https://%s/%s/%s", host, user, repo))
   }
@@ -681,15 +684,56 @@ remote_git_url <- function(d) {
   NULL
 }
 
+# Fetch a URL's body as text via curl (with the Windows schannel SSL args that
+# the rest of the package relies on), falling back to base R's readLines.
+#' @keywords internal
+#' @noRd
+fetch_url_text <- function(url) {
+  curl_bin <- Sys.which("curl")
+  if (nzchar(curl_bin)) {
+    out <- tryCatch(suppressWarnings(system2(curl_bin,
+      c(curl_windows_ssl_args(), "-sSL", "--max-time", "30", shQuote(url)),
+      stdout = TRUE, stderr = FALSE)), error = function(e) character(0))
+    if (length(out)) return(paste(out, collapse = "\n"))
+  }
+  tryCatch(paste(readLines(url, warn = FALSE), collapse = "\n"), error = function(e) "")
+}
+
+# A package installed *from* an r-universe records `Repository: https://<u>.r-
+# universe.dev` but no source git URL locally; recover it from that universe's
+# API (which knows the RemoteUrl it built from). Best-effort - NULL on failure.
+#' @keywords internal
+#' @noRd
+runiverse_source_url <- function(repository, pkg) {
+  api <- sprintf("%s/api/packages/%s", sub("/+$", "", repository), pkg)
+  txt <- fetch_url_text(api)
+  if (!nzchar(txt)) return(NULL)
+  info <- tryCatch(jsonlite::fromJSON(txt), error = function(e) NULL)
+  url <- info$RemoteUrl
+  if (!is.null(url) && length(url) == 1L && nzchar(url)) url else NULL
+}
+
 #' Build an r-universe registry (`packages.json`) from an app's remotes
 #'
 #' Scans an app for the packages it uses (via [scan_r_package_deps()],
 #' including commented-out `library()` calls, since shinylive reads those),
-#' keeps the ones the build machine installed from a git forge
-#' (GitHub/GitLab/Bitbucket/git), and returns the registry entries an
-#' r-universe needs to build them - crucially their **WebAssembly** binaries,
-#' which [build_wasm()] then bundles offline. This is the automated form of
-#' hand-writing `packages.json`.
+#' keeps the ones that **aren't on CRAN or Bioconductor** (those get
+#' WebAssembly binaries automatically from `repo.r-wasm.org` /
+#' `bioc.r-universe.dev`), and returns the registry entries an r-universe
+#' needs to build the rest. This is the automated form of hand-writing
+#' `packages.json`.
+#'
+#' A package's source git URL is resolved from whatever metadata the install
+#' left behind, generalising past a single install method:
+#' * `RemoteType` github/gitlab/bitbucket/git (remotes/pak), or the legacy
+#'   `GithubUsername`/`GithubRepo` fields (old devtools);
+#' * failing that, if it was installed *from* an r-universe
+#'   (`Repository: https://<u>.r-universe.dev`), the URL is recovered from
+#'   that universe's API - so a package already on your universe is
+#'   re-detected instead of silently dropped on the next regeneration.
+#'
+#' Anything non-CRAN it still can't resolve a URL for is listed in a warning
+#' (add it to `packages.json` by hand), never dropped without notice.
 #'
 #' @param app_dir Directory containing the Shiny app.
 #' @return A list of `list(package=, url=, branch=?)` entries (possibly empty).
@@ -699,15 +743,31 @@ runiverse_registry <- function(app_dir) {
   direct <- scan_r_package_deps(app_dir, include_commented = TRUE)
   installed <- rownames(utils::installed.packages())
   entries <- list()
+  unresolved <- character(0)
   for (p in intersect(direct, installed)) {
     d <- tryCatch(utils::packageDescription(p), error = function(e) NULL)
     if (!inherits(d, "packageDescription")) next
+    repo <- d$Repository %||% ""
+    # CRAN / Bioconductor packages are built to wasm automatically - not our job.
+    if (identical(repo, "CRAN") || grepl("[Bb]ioconductor", repo) ||
+        !is.null(d$biocViews)) next
     url <- remote_git_url(d)
-    if (is.null(url)) next
+    if (is.null(url) && grepl("r-universe[.]dev", repo)) {
+      url <- runiverse_source_url(repo, p)   # recover source from the universe API
+    }
+    if (is.null(url)) {
+      # Non-CRAN but no resolvable git URL (e.g. a local source install): flag
+      # it rather than silently omit it.
+      if (nzchar(repo) || any(grepl("^(Remote|Github)", names(d)))) unresolved <- c(unresolved, p)
+      next
+    }
     entry <- list(package = p, url = url)
     ref <- d$RemoteRef
     if (!is.null(ref) && nzchar(ref) && !identical(ref, "HEAD")) entry$branch <- ref
     entries[[length(entries) + 1L]] <- entry
+  }
+  if (length(unresolved)) {
+    cli::cli_warn(c("!" = "Couldn't resolve a git URL for non-CRAN package{?s} {.pkg {unresolved}} - add {?it/them} to {.path packages.json} by hand if the app needs {?its/their} wasm build."))
   }
   entries
 }
@@ -715,9 +775,10 @@ runiverse_registry <- function(app_dir) {
 #' Write an r-universe registry (`packages.json`) for an app's remote packages
 #'
 #' Writes the [runiverse_registry()] entries to a `packages.json` file - the
-#' registry you commit to a repo named `universe` in your GitHub account to
-#' have r-universe build (and wasm-compile) those packages, so [build_wasm()]
-#' can bundle them offline. See the README "r-universe" setup.
+#' registry you commit to a repo named `<your-username>.r-universe.dev` in
+#' your GitHub account to have r-universe build (and wasm-compile) those
+#' packages, so [build_wasm()] can bundle them offline. See the README
+#' "r-universe" setup.
 #'
 #' @param app_dir Directory containing the Shiny app.
 #' @param path Output path for the registry JSON.

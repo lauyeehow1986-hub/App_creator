@@ -133,8 +133,12 @@ app renders the `ggradar` chart).
 
 Everything is R/CLI except one browser click:
 
-1. **Generate the registry** from your app (finds every GitHub/GitLab/
-   Bitbucket-installed dependency):
+1. **Generate the registry** from your app. It lists every dependency that
+   **isn't on CRAN or Bioconductor** (those get wasm binaries automatically),
+   resolving each one's git URL from whatever the install left behind —
+   `RemoteType` (remotes/pak), the legacy `Github*` fields (old devtools), or,
+   for a package already on your r-universe, that universe's API. So it catches
+   your GitHub packages regardless of *how* they were installed:
    ```r
    write_runiverse_registry("path/to/app", "packages.json")
    ```
@@ -169,7 +173,11 @@ Everything is R/CLI except one browser click:
    ```
 
 Adding another such package later is just `write_runiverse_registry()` → push
-to that repo → it rebuilds automatically.
+to that repo → it rebuilds automatically. Because step 5 installs *from* your
+universe, a later re-run **re-detects** those packages (via the universe API)
+instead of dropping them — so regenerating `packages.json` only ever adds,
+never silently loses an entry. Anything genuinely non-CRAN it still can't
+resolve a URL for is called out in a warning, not omitted quietly.
 
 **Run on the target**
 

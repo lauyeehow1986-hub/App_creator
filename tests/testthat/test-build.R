@@ -296,6 +296,9 @@ test_that("remote_git_url builds source URLs for git-forge remotes", {
   expect_identical(remote_git_url(list(RemoteType = "git", RemoteUrl = "https://x/y.git")),
                    "https://x/y.git")
   expect_null(remote_git_url(list(RemoteType = "cran")))
+  # legacy devtools fields (no RemoteType) are handled too
+  expect_identical(remote_git_url(list(GithubUsername = "u", GithubRepo = "r")),
+                   "https://github.com/u/r")
 })
 
 test_that("runiverse_registry is empty for an app with no remote packages", {
