@@ -224,6 +224,34 @@ Copy `dist/portable/` over and double-click **`run.bat`**. It launches the
 app from the bundled `R-Portable\` against the private `library\` — no R
 install, no admin.
 
+#### Reproducible builds (lock the R version *and* package versions)
+
+By default the build floats: it fetches the latest R-Portable and the
+latest package versions on CRAN at build time, so two builds weeks apart
+can differ. To lock both:
+
+```r
+build_portable(
+  my_app, platform = "windows",
+  r_portable_version = "4.4.1",   # pin R
+  snapshot           = "2025-03-01"  # pin every CRAN package to that day's versions
+)
+```
+
+`snapshot` installs from that day's
+[Posit Public Package Manager](https://packagemanager.posit.co) snapshot
+instead of the floating latest, so every rebuild resolves the *same*
+versions (no `renv` needed). Each bundle's `manifest.json` also records
+`r_version`, `snapshot`, and `package_versions` (the exact version of every
+package that landed), so any bundle is auditable and reproducible without a
+rebuild.
+
+> **Keep the R version and snapshot date close.** PPM only serves Windows
+> *binaries* for R versions it still builds for; pinning a very old R with a
+> recent snapshot can leave only source packages (which then need a compiler
+> on the build machine). Pairing an R version with a snapshot from around
+> when that R was current avoids this.
+
 #### Packages that need a native runtime (rJava, tesseract, RMariaDB, rstan)
 
 Some packages are only a thin binding to a **native runtime that lives

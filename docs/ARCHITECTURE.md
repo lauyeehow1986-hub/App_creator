@@ -139,6 +139,24 @@ All three are fixed in `R/target-portable.R`; a from-scratch
 `build_portable()` → `run.bat` → real Shiny app in a real browser run
 was re-verified after each fix.
 
+## Reproducible builds (`R/target-portable.R`)
+
+`build_portable()` is float-by-default (latest R-Portable, latest CRAN
+versions at build time) but can be fully pinned: `r_portable_version`
+locks R, and `snapshot = "YYYY-MM-DD"` locks every CRAN package by
+installing from that day's Posit Package Manager snapshot
+(`cran_repo()` just swaps the repo URL; the install path is otherwise the
+verified one). This is deliberately **renv-free** - consistent with
+`scan_r_package_deps()` avoiding renv - because a snapshot pin gives
+reproducibility without a lockfile to carry, install, or keep in sync.
+Every bundle's `manifest.json` records `r_version`, `snapshot`, and
+`package_versions` (exact version of each installed package via
+`installed_package_versions()`), so a build is auditable and reproducible
+without diffing. Caveat, and it's the same tension as the win.binary bug
+above: PPM serves Windows binaries only for R versions it still builds
+for, so a very old R + a recent snapshot can fall back to source-only -
+keep the R version and snapshot date close.
+
 ## Native-runtime provisioning (portable-only, `R/target-portable.R`)
 
 Some packages are only a thin R binding to a **native runtime that lives

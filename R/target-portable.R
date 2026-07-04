@@ -53,7 +53,17 @@
 #' @param r_portable_version R-Portable version to fetch, e.g.
 #'   `"4.2.0"`. If `NULL` (default), uses whatever
 #'   `sourceforge.net/projects/rportable/files/latest` currently
-#'   resolves to.
+#'   resolves to. Pin it (together with `snapshot`) for a reproducible
+#'   bundle.
+#' @param snapshot Optional CRAN snapshot date `"YYYY-MM-DD"` for
+#'   **reproducible package versions**. When set, CRAN packages are
+#'   installed from that day's [Posit Public Package
+#'   Manager](https://packagemanager.posit.co) snapshot instead of the
+#'   floating latest, so every rebuild resolves the same versions. Pair
+#'   with `r_portable_version` to lock R too. (Caveat: PPM only serves
+#'   Windows *binaries* for R versions it still builds for; pinning a very
+#'   old R with a recent snapshot may leave only source packages - keep
+#'   the R version and snapshot date reasonably close.)
 #' @param cache_dir Directory to cache the downloaded R-Portable build
 #'   in across calls. Defaults to a per-user cache dir (see
 #'   [tools::R_user_dir()]).
@@ -90,6 +100,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
                             platform = c("windows", "macos", "linux"),
                             packages = NULL,
                             r_portable_version = NULL,
+                            snapshot = NULL,
                             cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
                             port = 8973,
                             native_runtime = list(),
@@ -124,7 +135,7 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
 
   lib_dir <- fs::path(out_dir, "library")
   fs::dir_create(lib_dir)
-  install_packages_portable(bundle_r_dir, lib_dir, pkgs)
+  install_packages_portable(bundle_r_dir, lib_dir, pkgs, snapshot = snapshot)
 
   r_version <- r_portable_version %||% read_r_portable_version(bundle_r_dir)
   env_lines <- provision_native_runtimes(pkgs, out_dir, cache_dir, native_runtime, r_version)
@@ -134,6 +145,12 @@ build_portable <- function(app_dir, out_dir = "dist/portable",
   manifest <- write_build_manifest(out_dir, "portable", app_dir, extra = list(
     platform = platform,
     packages = pkgs,
+    # Reproducibility record: the exact R version, the snapshot pin (if any),
+    # and the exact version of every package that landed in the bundle - so this
+    # build can be identified and reproduced without diffing files.
+    r_version = r_version %||% NA_character_,
+    snapshot = snapshot %||% NA_character_,
+    package_versions = as.list(installed_package_versions(lib_dir)),
     runtimes = runtimes,
     native_runtimes_bundled = attr(env_lines, "provisioned") %||% character(0),
     entry_point = "run.bat",
@@ -720,9 +737,36 @@ copy_pure_r_packages <- function(lib_dir, pkgs) {
   copied
 }
 
+# CRAN repo URL, optionally pinned to a dated Posit Package Manager snapshot so
+# every rebuild resolves the *same* package versions (renv-free reproducibility).
 #' @keywords internal
 #' @noRd
-install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
+cran_repo <- function(snapshot = NULL) {
+  if (is.null(snapshot)) return("https://cloud.r-project.org")
+  if (!grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", snapshot)) {
+    cli::cli_abort("{.arg snapshot} must be a date like {.val 2024-06-01} (a Posit PM CRAN snapshot), not {.val {snapshot}}.")
+  }
+  sprintf("https://packagemanager.posit.co/cran/%s", snapshot)
+}
+
+# The exact installed version of every package in the bundle library, read from
+# each DESCRIPTION - so the manifest records precisely what shipped.
+#' @keywords internal
+#' @noRd
+installed_package_versions <- function(lib_dir) {
+  out <- character(0)
+  for (d in fs::dir_ls(lib_dir, type = "directory")) {
+    f <- fs::path(d, "DESCRIPTION")
+    if (!fs::file_exists(f)) next
+    v <- tryCatch(unname(read.dcf(f, "Version")[1, 1]), error = function(e) NA_character_)
+    if (!is.na(v)) out[fs::path_file(d)] <- v
+  }
+  out[order(names(out))]
+}
+
+#' @keywords internal
+#' @noRd
+install_packages_portable <- function(r_portable_dir, lib_dir, pkgs, snapshot = NULL) {
   if (length(pkgs) == 0) return(invisible())
   rscript <- fs::path(r_portable_dir, "bin", "x64", "Rscript.exe")
   if (!fs::file_exists(rscript)) rscript <- fs::path(r_portable_dir, "bin", "Rscript.exe")
@@ -754,8 +798,8 @@ install_packages_portable <- function(r_portable_dir, lib_dir, pkgs) {
   }, add = TRUE)
 
   if (length(cran_pkgs) > 0) {
-    cli::cli_inform("Installing {length(cran_pkgs)} CRAN package{?s} into the bundle's private library...")
-    repos <- c("https://cloud.r-project.org", extra_repos)
+    cli::cli_inform("Installing {length(cran_pkgs)} CRAN package{?s} into the bundle's private library{if (!is.null(snapshot)) sprintf(' (pinned to the %s snapshot)', snapshot) else ''}...")
+    repos <- c(cran_repo(snapshot), extra_repos)
     install_expr <- sprintf(
       'options(download.file.method = "wininet"); install.packages(c(%s), lib = %s, repos = c(%s), type = "win.binary")',
       paste(sprintf('"%s"', cran_pkgs), collapse = ", "),

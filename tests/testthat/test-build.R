@@ -353,6 +353,25 @@ test_that("provision_native_runtimes warns on an unknown native_runtime entry", 
                  "unknown")
 })
 
+test_that("cran_repo pins to a Posit PM snapshot and rejects bad dates", {
+  expect_identical(cran_repo(NULL), "https://cloud.r-project.org")
+  expect_identical(cran_repo("2024-06-01"),
+                   "https://packagemanager.posit.co/cran/2024-06-01")
+  expect_error(cran_repo("June 2024"), "snapshot")
+  expect_error(cran_repo("2024/06/01"), "snapshot")
+})
+
+test_that("installed_package_versions reads exact versions from DESCRIPTIONs", {
+  lib <- fs::path_temp("shinyalcatraz-vers"); if (fs::dir_exists(lib)) fs::dir_delete(lib)
+  fs::dir_create(fs::path(lib, "foo")); fs::dir_create(fs::path(lib, "bar"))
+  on.exit(fs::dir_delete(lib))
+  writeLines(c("Package: foo", "Version: 1.2.3"), fs::path(lib, "foo", "DESCRIPTION"))
+  writeLines(c("Package: bar", "Version: 0.9.0"), fs::path(lib, "bar", "DESCRIPTION"))
+  v <- installed_package_versions(lib)
+  expect_identical(v[["foo"]], "1.2.3")
+  expect_identical(v[["bar"]], "0.9.0")
+})
+
 test_that("resolve_runtime_preset expands auto/all/none correctly", {
   # auto: no forced options
   expect_identical(resolve_runtime_preset("auto"), list())

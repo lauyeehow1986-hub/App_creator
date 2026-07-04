@@ -10,6 +10,7 @@ build_portable(
   platform = c("windows", "macos", "linux"),
   packages = NULL,
   r_portable_version = NULL,
+  snapshot = NULL,
   cache_dir = tools::R_user_dir("shinyalcatraz", "cache"),
   port = 8973,
   native_runtime = list(),
@@ -33,7 +34,17 @@ files via \code{\link[=scan_r_package_deps]{scan_r_package_deps()}}.}
 \item{r_portable_version}{R-Portable version to fetch, e.g.
 \code{"4.2.0"}. If \code{NULL} (default), uses whatever
 \code{sourceforge.net/projects/rportable/files/latest} currently
-resolves to.}
+resolves to. Pin it (together with \code{snapshot}) for a reproducible
+bundle.}
+
+\item{snapshot}{Optional CRAN snapshot date \code{"YYYY-MM-DD"} for
+\strong{reproducible package versions}. When set, CRAN packages are
+installed from that day's \href{https://packagemanager.posit.co}{Posit Public Package Manager} snapshot instead of the
+floating latest, so every rebuild resolves the same versions. Pair
+with \code{r_portable_version} to lock R too. (Caveat: PPM only serves
+Windows \emph{binaries} for R versions it still builds for; pinning a very
+old R with a recent snapshot may leave only source packages - keep
+the R version and snapshot date reasonably close.)}
 
 \item{cache_dir}{Directory to cache the downloaded R-Portable build
 in across calls. Defaults to a per-user cache dir (see
