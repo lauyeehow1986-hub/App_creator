@@ -32,5 +32,6 @@ Suggests:
     BiocManager,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
+NeedsCompilation: no
 URL: https://github.com/lauyeehow1986-hub/shiny_alcatraz
 BugReports: https://github.com/lauyeehow1986-hub/shiny_alcatraz/issues
